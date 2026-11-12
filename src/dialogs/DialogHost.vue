@@ -13,9 +13,11 @@ import WizardDialog from './WizardDialog.vue';
 import AboutDialog from './AboutDialog.vue';
 import DetailReportDialog from './DetailReportDialog.vue';
 import SaveInfoDialog from './SaveInfoDialog.vue';
+import ReportTextDialog from './ReportTextDialog.vue';
 
 const MAP = {
   saveInfo: SaveInfoDialog,
+  reportText: ReportTextDialog,
   dataSources: DataSourceDialog,
   groupSort: GroupSortDialog,
   parameters: ParametersDialog,

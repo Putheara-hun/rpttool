@@ -1,45 +1,39 @@
-# Render Blueprint - hosts the ReportTool designer for embedding in other systems.
+# Render Blueprint - ReportTool designer WITH database connections.
 #
-# Design-only hosting: the designer runs completely in the browser. Your system sends the data
-# (designer.setData) and saves the report text it gets back (onSave), so no server code runs here.
-# That is why this is a static site: free, never sleeps, served from Render's CDN, and the
-# database API (server/) is not exposed on the internet.
+# Runs ReportTool's server program (server/index.mjs): it serves the designer and connects to databases
+# (SQL Server, Oracle, PostgreSQL, MySQL). Database access is protected by a team password.
 #
-# Deploy: push this project to GitHub/GitLab, then in Render choose New > Blueprint and pick the repository.
-# After the deploy:
-#   designer:   https://<service>.onrender.com/
-#   embed SDK:  https://<service>.onrender.com/embed.js
-#   demo host:  https://<service>.onrender.com/embed-demo.html
+# Deploy: in Render choose New > Blueprint, pick this repository. Render asks for:
+#   REPORTTOOL_PASSWORD     the team password people type before they can use databases (use a long one)
+#   REPORTTOOL_CONNECTIONS  optional: connections ready for everybody, with their passwords, as JSON, e.g.
+#     [{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,"database":"SalesDB",
+#       "user":"report_reader","password":"...","trustServerCertificate":true}]
+#     (enter [] if you have none - people can still add connections in the designer)
+# Both stay secret in Render (Environment tab); change them there at any time.
+#
+# Your database server must accept connections from Render (open its firewall for Render's outbound
+# addresses: Render dashboard > the service > Connect > Outbound).
+# Free plan: the service sleeps after 15 minutes without visitors; the first visit then takes about a minute.
+# Connections added in the designer are kept in memory only (gone after a restart / sleep); creating one again
+# with the same details reconnects existing reports. Connections in REPORTTOOL_CONNECTIONS are always there.
 
 services:
   - type: web
-    runtime: static
-    name: reporttool
+    runtime: node
+    name: reporttool-server
+    plan: free
+    # choose the region closest to your database server: oregon, ohio, virginia, frankfurt or singapore
+    region: singapore
     # --include=dev: the build needs vite / vue-tsc from devDependencies
     buildCommand: npm ci --include=dev && npm run build
-    staticPublishPath: ./dist
+    startCommand: node server/index.mjs
+    healthCheckPath: /
     envVars:
       - key: NODE_VERSION
         value: "22"
-    headers:
-      # Which systems may show the designer in an iframe.
-      # EDIT THIS LINE: replace https://erp.example.com with the address of each system that embeds
-      # the designer, separated by spaces (e.g. https://erp.mycompany.com https://hr.mycompany.com).
-      # 'self' keeps /embed-demo.html working.
-      - path: /*
-        name: Content-Security-Policy
-        value: "frame-ancestors 'self' https://erp.example.com"
-      # embed.js has a fixed name: make browsers check for a new version on every page load
-      - path: /embed.js
-        name: Cache-Control
-        value: no-cache
-      - path: /
-        name: Cache-Control
-        value: no-cache
-      - path: /index.html
-        name: Cache-Control
-        value: no-cache
-      # Vite puts a content hash in these file names, so they can be cached forever
-      - path: /assets/*
-        name: Cache-Control
-        value: public, max-age=31536000, immutable
+      - key: HOST
+        value: 0.0.0.0
+      - key: REPORTTOOL_PASSWORD
+        sync: false
+      - key: REPORTTOOL_CONNECTIONS
+        sync: false

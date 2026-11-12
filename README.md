@@ -12,6 +12,17 @@ npm run build      # type-check + production build into dist/
 npm start          # serve the production build + database service at http://localhost:5174
 ```
 
+## Copy the report as text (store it in your own system)
+
+The simplest way to keep reports in another system: no integration needed.
+
+- **Copy Text** (title bar, top right) → choose **XML (RDL)**, **HTML** or **JSON** → **Copy to clipboard**, then paste the
+  text into your system (e.g. an `NVARCHAR(MAX)` column). Copying counts as saving (the • unsaved mark goes away).
+- **Open from text** (clipboard icon next to Open, or Save ▾ → Open from Text) → paste the text → **Open report** to edit it
+  again. All three formats keep the full design; RDL from Report Builder / SSRS can be pasted too.
+- XML (RDL) also opens in SQL Server Reporting Services / Report Builder; HTML is the finished report with its data
+  (prints from any browser); JSON is the smallest.
+
 ## Embed the designer in another system (design only, output as text)
 
 The host system shows the designer in an iframe; when the user clicks **Save** the designer hands the report back
@@ -46,17 +57,25 @@ as **text** and the host stores it in its own database. Try `http://localhost:51
   (sites allowed to show the designer), `REPORTTOOL_DISABLE_DB=1` (no database access — the host sends the data),
   `REPORTTOOL_ALLOWED_HOSTS=reports.example.com` (only if the database API must be reachable under that name).
 
-### Host on Render
+### Host on Render (with database connections)
 
-`render.yaml` deploys the designer as a Render **static site** (free, no sleeping, CDN; no database API on the internet —
-the systems that embed it send the data).
+`render.yaml` runs ReportTool's server on Render (web service `reporttool-server`): the designer plus database
+connections, protected by a **team password**.
 
-1. In `render.yaml`, replace `https://erp.example.com` in the `frame-ancestors` line with the address of every system
-   that shows the designer (space separated). Systems not listed cannot embed it.
-2. Push the project to GitHub / GitLab, then in Render: **New → Blueprint** → choose the repository → **Apply**.
-3. Use `https://<service>.onrender.com/embed.js` in your systems; test at `https://<service>.onrender.com/embed-demo.html`.
+1. Push the project to GitHub / GitLab, then in Render: **New → Blueprint** → choose the repository. Render asks for
+   - `REPORTTOOL_PASSWORD` — the team password (use a long one). Anyone who opens a database in the designer is asked
+     for it once per browser (7 days). After 10 wrong tries an address is locked for 15 minutes.
+   - `REPORTTOOL_CONNECTIONS` — optional, enter `[]` for none. Connections ready for everybody, with their password,
+     as JSON: `[{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,"database":"SalesDB","user":"report_reader","password":"…","trustServerCertificate":true}]`.
+     They survive restarts and cannot be changed or deleted in the designer.
+2. Your database server must accept connections from Render's outbound addresses (Render: service ▸ Connect ▸ Outbound).
+3. Use a **read-only** database login (e.g. only `db_datareader`): signed-in users can run any SQL with it
+   (Custom SQL query).
 
-Changing the allowed systems later = edit that line and push (Render redeploys automatically).
+Notes: free plan = the service sleeps after 15 minutes without visitors (first visit then ~1 minute) and connections
+added in the designer are lost (memory only) — creating one again with the same details reconnects saved reports.
+Change the password or connections later in Render ▸ Environment (changing the password signs everybody out).
+Without `REPORTTOOL_PASSWORD` the server refuses database access from the internet.
 
 ## Save as HTML or RDL
 
@@ -174,7 +193,10 @@ Report ▸ **Data Sources** ▸ **Add data source** ▸ **Database**:
 
 Details:
 - Database access goes through a small Node service in `server/` (runs inside `npm run dev` / `npm start`).
-  It only answers requests from this app on `localhost`.
+  It only answers requests from this app on `localhost` — unless a team password is set (`REPORTTOOL_PASSWORD`,
+  see *Host on Render*). A website without this service (static hosting) shows how to use CSV / JSON data instead.
+- A connection created again with the same server, database and user gets the same id, so reports that used it
+  find it again after a restart.
 - Drivers are pure JavaScript — no Oracle Client or ODBC setup needed (`mssql`, `pg`, `mysql2`, `oracledb`
   Thin mode, Node's built-in `node:sqlite`).
 - Oracle: procedures with `SYS_REFCURSOR` OUT parameters, functions returning a ref cursor, pipelined table

@@ -1,6 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { ChevronDown, ChevronRight, CodeXml, Eye, SquareFunction, KeyRound, Pencil, Play, Plus, RefreshCw, Search, Sheet, Table, Trash2, Variable, Workflow } from 'lucide-vue-next';
+import {
+  Braces,
+  ChevronDown,
+  ChevronRight,
+  CodeXml,
+  DatabaseZap,
+  Eye,
+  SquareFunction,
+  KeyRound,
+  LogIn,
+  LogOut,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Sheet,
+  Table,
+  Trash2,
+  Variable,
+  Workflow,
+} from 'lucide-vue-next';
 import ExprInput from '../components/ExprInput.vue';
 import ConnectionDialog from './ConnectionDialog.vue';
 import type { ParamType, SqlMode, SqlParam, SqlSource } from '../model/types';
@@ -14,6 +35,8 @@ import {
   listConnections,
   objectLabel,
   providerLabel,
+  serverHealth,
+  signOut,
   type DbConnection,
   type DbObject,
   type DbSchema,
@@ -21,7 +44,7 @@ import {
 import { mutate, notify, requestLogin, state } from '../store/designer';
 
 const props = defineProps<{ source: SqlSource }>();
-const emit = defineEmits<{ preview: [] }>();
+const emit = defineEmits<{ preview: []; switchKind: [kind: 'json' | 'csv'] }>();
 const src = props.source;
 
 const connections = ref<DbConnection[]>([]);
@@ -47,13 +70,41 @@ async function withLogin<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function loadConnections() {
+/** no ReportTool server on this website (static hosting): no database connections possible */
+const noService = ref(false);
+/** the server has a team password and the sign-in was cancelled */
+const needSignIn = ref(false);
+/** signed in with the team password (offer "Sign out") */
+const signedIn = ref(false);
+async function loadConnections(): Promise<boolean> {
   try {
     connections.value = await listConnections();
     error.value = '';
+    noService.value = false;
+    needSignIn.value = false;
+    return true;
   } catch (e) {
     error.value = (e as Error).message;
+    noService.value = e instanceof DbError && !!e.noService;
+    needSignIn.value = e instanceof DbError && !!e.authRequired;
+    return false;
   }
+}
+async function refreshAuth() {
+  const h = await serverHealth().catch(() => null);
+  signedIn.value = !!(h?.auth && h.signedIn);
+}
+async function signInAgain() {
+  if ((await loadConnections()) && src.connectionId && current.value) await loadSchema();
+  await refreshAuth();
+}
+async function doSignOut() {
+  await signOut().catch(() => undefined);
+  connections.value = [];
+  schema.value = null;
+  signedIn.value = false;
+  needSignIn.value = true;
+  error.value = 'Signed out. Sign in again to use database connections.';
 }
 async function loadSchema() {
   schema.value = null;
@@ -169,8 +220,9 @@ function linkReportParam(p: SqlParam) {
 }
 
 onMounted(async () => {
-  await loadConnections();
-  if (src.connectionId) {
+  const loaded = await loadConnections();
+  void refreshAuth();
+  if (loaded && src.connectionId) {
     if (!current.value) error.value = `The connection "${src.connectionName ?? src.connectionId}" is not defined on this computer. Choose or create a connection.`;
     else await loadSchema();
   }
@@ -179,6 +231,26 @@ onMounted(async () => {
 
 <template>
   <div class="col sql-editor" style="gap: 8px; min-height: 0">
+    <!-- website without the ReportTool server (static hosting): explain, and offer what does work here -->
+    <div v-if="noService" class="no-db">
+      <div class="no-db-head"><DatabaseZap :size="20" /> Database connections don't work on this website</div>
+      <p>This website runs only the designer, inside your browser. A browser cannot log in to SQL Server, Oracle, PostgreSQL or MySQL by itself: that needs ReportTool running on a computer that can reach the database.</p>
+      <div class="no-db-ways">
+        <div class="no-db-way">
+          <b>Use your data on this website</b>
+          <span>Paste the rows as CSV or JSON. From SQL Server Management Studio: run the query, right-click the results → <b>Copy with Headers</b>, then paste into CSV.</span>
+          <div class="row" style="margin-top: 8px">
+            <button class="btn small primary" @click="emit('switchKind', 'csv')"><Sheet :size="13" /> Use CSV data</button>
+            <button class="btn small" @click="emit('switchKind', 'json')"><Braces :size="13" /> Use JSON data</button>
+          </div>
+        </div>
+        <div class="no-db-way">
+          <b>Design with the live database</b>
+          <span>Run ReportTool on your computer (<code>npm run dev</code>) and create the connection there. When the design is finished, use <b>Copy Text</b> to take it to your system.</span>
+        </div>
+      </div>
+    </div>
+    <template v-else>
     <div class="row" style="flex-wrap: wrap">
       <b style="font-size: 12.5px">Connection</b>
       <select style="min-width: 260px" :value="src.connectionId" @change="pickConnection(($event.target as HTMLSelectElement).value)">
@@ -186,12 +258,21 @@ onMounted(async () => {
         <option v-for="c in connections" :key="c.id" :value="c.id">{{ c.name }} · {{ providerLabel(c.provider) }}{{ c.hasPassword ? '' : ' (log in)' }}</option>
       </select>
       <button class="btn small" @click="connDialog = { conn: null }"><Plus :size="13" /> New connection…</button>
-      <button class="btn small" :disabled="!current" @click="connDialog = { conn: current }"><Pencil :size="13" /> Edit</button>
+      <button class="btn small" :disabled="!current || current.fixed" :title="current?.fixed ? 'Set up on the server — cannot be changed here' : ''" @click="connDialog = { conn: current }">
+        <Pencil :size="13" /> Edit
+      </button>
       <button v-if="current && !current.hasPassword" class="btn small primary" @click="login"><KeyRound :size="13" /> Log in</button>
       <button class="icon-btn" :disabled="!current" title="Reload tables, views, procedures and functions" @click="loadSchema"><RefreshCw :size="14" /></button>
-      <button class="icon-btn" :disabled="!current" title="Delete this connection" @click="removeConnection"><Trash2 :size="14" /></button>
+      <button class="icon-btn" :disabled="!current || current.fixed" :title="current?.fixed ? 'Set up on the server — cannot be deleted here' : 'Delete this connection'" @click="removeConnection">
+        <Trash2 :size="14" />
+      </button>
+      <span class="grow" />
+      <button v-if="signedIn" class="btn small" title="Sign out of this website's database access" @click="doSignOut"><LogOut :size="13" /> Sign out</button>
     </div>
-    <div v-if="error" class="err">{{ error }}</div>
+    <div v-if="error" class="row err" style="gap: 8px">
+      <span>{{ error }}</span>
+      <button v-if="needSignIn" class="btn small primary" @click="signInAgain"><LogIn :size="13" /> Sign in</button>
+    </div>
 
     <div class="split" style="height: 290px">
       <div class="col" style="width: 300px; min-width: 300px">
@@ -280,6 +361,7 @@ onMounted(async () => {
         <div v-else-if="src.mode === 'procedure' || src.mode === 'function'" class="hint">This routine has no input parameters.</div>
       </div>
     </div>
+    </template>
     <ConnectionDialog v-if="connDialog" :connection="connDialog.conn" @close="connDialog = null" @saved="onSaved" />
   </div>
 </template>

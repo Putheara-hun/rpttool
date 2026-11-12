@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { deepClone } from '../model/clone';
-import { computed, ref, toRaw, watch } from 'vue';
+import { computed, nextTick, ref, toRaw, watch } from 'vue';
 import { Database, DatabaseZap, Plus, Star, Trash2, Upload } from 'lucide-vue-next';
 import Modal from '../components/Modal.vue';
 import SqlSourceEditor from './SqlSourceEditor.vue';
@@ -42,6 +42,25 @@ function onKindChange() {
   if (cur.value?.kind === 'sql' && !cur.value.sql) cur.value.sql = newSql();
   void refresh(true);
 }
+/** from the "no database on this website" notice: same data source, rows pasted as CSV / JSON instead */
+const contentBox = ref<HTMLTextAreaElement>();
+function switchKind(kind: 'json' | 'csv') {
+  const ds = cur.value;
+  if (!ds) return;
+  ds.kind = kind;
+  ds.content = '';
+  ds.fields = [];
+  previewErr.value = '';
+  previewRows.value = [];
+  void nextTick(() => contentBox.value?.focus());
+}
+/** pasted rows: read them right away (the text lands in the box after the paste event) */
+const afterPaste = () => setTimeout(() => void refresh(true), 0);
+const contentPlaceholder = computed(() =>
+  cur.value?.kind === 'csv'
+    ? 'Paste rows here — first line = column names.\nFrom SQL Server Management Studio: right-click the results → Copy with Headers, then paste (Ctrl+V).\n\nName,Value,Date\nAlpha,10,2025-01-15'
+    : 'Paste a JSON array of rows here, e.g.\n[\n  { "Name": "Alpha", "Value": 10, "Date": "2025-01-15" }\n]',
+);
 function remove() {
   if (!cur.value) return;
   const id = cur.value.id;
@@ -196,9 +215,17 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
             <button class="btn small" @click="loadFile"><Upload :size="13" /> Load file…</button>
             <button class="btn small" @click="refresh(true)">Parse</button>
           </div>
-          <textarea v-model="cur.content" style="height: 120px; font-family: Consolas, monospace; font-size: 12px" spellcheck="false" @change="refresh(true)" />
+          <textarea
+            ref="contentBox"
+            v-model="cur.content"
+            style="height: 120px; font-family: Consolas, monospace; font-size: 12px"
+            spellcheck="false"
+            :placeholder="contentPlaceholder"
+            @change="refresh(true)"
+            @paste="afterPaste"
+          />
         </template>
-        <SqlSourceEditor v-if="cur.kind === 'sql' && cur.sql" :key="cur.id" :source="cur.sql" @preview="refresh(true)" />
+        <SqlSourceEditor v-if="cur.kind === 'sql' && cur.sql" :key="cur.id" :source="cur.sql" @preview="refresh(true)" @switch-kind="switchKind" />
         <div v-if="previewErr" class="err" style="word-break: break-word">{{ previewErr }}</div>
 
         <div class="split" style="flex: 1; min-height: 0">

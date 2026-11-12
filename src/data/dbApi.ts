@@ -34,6 +34,8 @@ export interface DbConnection {
   schema?: string;
   savePassword?: boolean;
   hasPassword?: boolean;
+  /** set up on the server (REPORTTOOL_CONNECTIONS): cannot be edited or deleted in the designer */
+  fixed?: boolean;
 }
 
 export interface DbObject {
@@ -70,9 +72,15 @@ export class DbError extends Error {
   missingConnection?: boolean;
   connectionId?: string;
   connectionName?: string;
+  /** this website has no ReportTool server (static hosting): database features cannot work here */
+  noService?: boolean;
+  /** the server has a team password and this browser is not signed in */
+  authRequired?: boolean;
   constructor(message: string, status = 0, extra: any = {}) {
     super(message);
     this.status = status;
+    this.noService = extra.noService;
+    this.authRequired = extra.authRequired;
     this.needLogin = extra.needLogin;
     this.missingConnection = extra.missingConnection;
     this.connectionId = extra.connectionId;
@@ -80,7 +88,17 @@ export class DbError extends Error {
   }
 }
 
-async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
+export const NO_DB_SERVICE =
+  'Database connections are not available on this website: it only hosts the designer, without the ReportTool server program that talks to databases. ' +
+  'Use JSON or CSV data here, or run ReportTool on your computer ("npm run dev") to design with database data.';
+
+/** asks the user for the team password (sign-in dialog); true = signed in. Set by the designer store. */
+let authHandler: (() => Promise<boolean>) | null = null;
+export function setAuthHandler(fn: () => Promise<boolean>) {
+  authHandler = fn;
+}
+
+async function api<T>(method: string, url: string, body?: unknown, retried = false): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -91,14 +109,19 @@ async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
   } catch {
     throw new DbError('The ReportTool database service is not running. Start the app with "npm run dev" (or "npm start" for the built version).');
   }
+  // The ReportTool server always answers in JSON. A static host (e.g. a Render static site) has no /api at all:
+  // it answers 404, or even "200 OK" with an empty body for POST — that must never count as success.
+  if (!(res.headers.get('content-type') ?? '').includes('application/json')) throw new DbError(NO_DB_SERVICE, res.status, { noService: true });
   const data = await res.json().catch(() => ({}));
-  // a static host (e.g. Render static site) has no /api at all: say so instead of "Request failed (404)"
-  const fallback = res.status === 404 || res.status === 405 ? 'Database access is not available on this server. The system that opened the designer provides the data.' : `Request failed (${res.status})`;
-  if (!res.ok) throw new DbError(data.error || fallback, res.status, data);
+  // team password: sign in, then repeat the request once
+  if (res.status === 401 && data.authRequired && !retried && authHandler && (await authHandler())) return api<T>(method, url, body, true);
+  if (!res.ok) throw new DbError(data.error || `Request failed (${res.status})`, res.status, data);
   return data as T;
 }
 
-export const serverHealth = () => api<{ ok: boolean; providers: string[]; savesConnections?: boolean }>('GET', './api/health');
+export const serverHealth = () => api<{ ok: boolean; providers: string[]; savesConnections?: boolean; auth?: boolean; signedIn?: boolean }>('GET', './api/health');
+export const signIn = (password: string) => api<{ ok: boolean }>('POST', './api/auth/login', { password }, true);
+export const signOut = () => api<{ ok: boolean }>('POST', './api/auth/logout', {}, true);
 export const listConnections = () => api<DbConnection[]>('GET', './api/connections');
 export const saveConnection = (c: DbConnection) => api<DbConnection>('POST', './api/connections', c);
 export const deleteConnection = (id: string) => api<{ ok: boolean }>('DELETE', './api/connections/' + encodeURIComponent(id));

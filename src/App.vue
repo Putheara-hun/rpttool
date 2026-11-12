@@ -5,7 +5,27 @@ import { embed, FORMAT_LABEL, initEmbed, saveToHost } from './embed/bridge';
 
 // ?embed=1: running inside another system's iframe
 initEmbed();
-import { Boxes, ChevronDown, Database, Eye, FileCode2, FilePlus, FileText, FolderOpen, Globe, History, ListTree, PencilRuler, Redo2, Save, SaveAll, SlidersHorizontal, Undo2 } from 'lucide-vue-next';
+import {
+  Boxes,
+  ChevronDown,
+  ClipboardCopy,
+  ClipboardPaste,
+  Database,
+  Eye,
+  FileCode2,
+  FilePlus,
+  FileText,
+  FolderOpen,
+  Globe,
+  History,
+  ListTree,
+  PencilRuler,
+  Redo2,
+  Save,
+  SaveAll,
+  SlidersHorizontal,
+  Undo2,
+} from 'lucide-vue-next';
 import Ribbon from './designer/Ribbon.vue';
 import Toolbox from './designer/Toolbox.vue';
 import FieldList from './designer/FieldList.vue';
@@ -16,6 +36,7 @@ import PreviewPanel from './preview/PreviewPanel.vue';
 import DialogHost from './dialogs/DialogHost.vue';
 import ExpressionEditor from './dialogs/ExpressionEditor.vue';
 import LoginDialog from './dialogs/LoginDialog.vue';
+import SiteLoginDialog from './dialogs/SiteLoginDialog.vue';
 import ContextMenu from './components/ContextMenu.vue';
 import {
   clearSelection,
@@ -25,6 +46,7 @@ import {
   history,
   newReportCmd,
   nudge,
+  openDialog,
   pickReportFile,
   redo,
   restorePreviousSession,
@@ -48,9 +70,15 @@ function saveMenu(e: MouseEvent) {
     { label: 'Save as HTML… (report + design)', icon: Globe, action: () => saveReportAs('html') },
     { label: 'Save as RDL… (SQL Server Reporting Services)', icon: FileCode2, action: () => saveReportAs('rdl') },
     { sep: true },
+    { label: 'Copy as Text… (XML / HTML / JSON)', icon: ClipboardCopy, action: copyAsText },
+    { label: 'Open from Text… (paste)', icon: ClipboardPaste, action: openFromText },
+    { sep: true },
     { label: 'Open… (.rptx, .html, .rdl)', icon: FolderOpen, kbd: 'Ctrl+O', action: pickReportFile },
   ]);
 }
+/** the report as text for the user's own system, and back */
+const copyAsText = () => openDialog('reportText', { tab: 'copy' });
+const openFromText = () => openDialog('reportText', { tab: 'open' });
 import { pageSizeText } from './model/defaults';
 
 const previous = ref<{ name: string; count: number } | null>(null);
@@ -79,7 +107,7 @@ const statusText = computed(() => {
 });
 
 function onKey(e: KeyboardEvent) {
-  if (state.dialog || state.exprRequest || state.loginRequests.length) return;
+  if (state.dialog || state.exprRequest || state.loginRequests.length || state.siteLogin) return;
   const t = e.target as HTMLElement;
   // only text-entry controls swallow shortcuts (checkboxes, radios, sliders, buttons do not)
   if (t instanceof HTMLInputElement && !['checkbox', 'radio', 'range', 'color', 'button'].includes(t.type)) return;
@@ -189,6 +217,7 @@ onBeforeUnmount(() => {
       <template v-if="!embed.active">
         <button class="icon-btn" title="New report (Ctrl+Alt+N)" @click="newReportCmd"><FilePlus :size="16" /></button>
         <button class="icon-btn" title="Open (Ctrl+O)" @click="pickReportFile"><FolderOpen :size="16" /></button>
+        <button class="icon-btn" title="Open from text (paste a copied report)" @click="openFromText"><ClipboardPaste :size="16" /></button>
         <button class="icon-btn" title="Save (Ctrl+S)" @click="saveReport()"><Save :size="16" /></button>
         <button class="icon-btn save-caret" title="Save as HTML / RDL…" @click="saveMenu"><ChevronDown :size="13" /></button>
       </template>
@@ -201,6 +230,12 @@ onBeforeUnmount(() => {
           <option v-for="f in embed.formats" :key="f" :value="f">{{ FORMAT_LABEL[f] }}</option>
         </select>
         <button class="btn small primary" :disabled="embed.saving" title="Save (Ctrl+S)" @click="saveToHost()"><Save :size="14" /> {{ embed.saving ? 'Saving…' : embed.saveLabel }}</button>
+      </div>
+      <!-- finished design -> text the user pastes into their own system -->
+      <div v-else class="embed-save">
+        <button class="btn small primary copy-text-btn" title="Copy the report as XML / HTML / JSON text to paste into your system" @click="copyAsText">
+          <ClipboardCopy :size="14" /> Copy Text
+        </button>
       </div>
       <div class="mode-switch">
         <button :class="{ on: state.mode === 'design' }" @click="state.mode = 'design'"><PencilRuler :size="14" /> Designer</button>
@@ -261,6 +296,7 @@ onBeforeUnmount(() => {
     <DialogHost />
     <ExpressionEditor v-if="state.exprRequest" />
     <LoginDialog v-if="state.loginRequests.length" :key="state.loginRequests[0].connectionId" />
+    <SiteLoginDialog v-if="state.siteLogin" />
     <ContextMenu />
     <div class="toasts">
       <div v-for="t in state.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>

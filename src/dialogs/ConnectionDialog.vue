@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { CircleCheck, Database, PlugZap, CircleX } from 'lucide-vue-next';
 import Modal from '../components/Modal.vue';
-import { PROVIDERS, saveConnection, serverHealth, testConnection, type DbConnection, type Provider } from '../data/dbApi';
+import { DbError, PROVIDERS, saveConnection, serverHealth, testConnection, type DbConnection, type Provider } from '../data/dbApi';
 
 const props = defineProps<{ connection?: DbConnection | null }>();
 const emit = defineEmits<{ close: []; saved: [c: DbConnection] }>();
@@ -29,9 +29,13 @@ const result = ref<{ ok: boolean; text: string } | null>(null);
 const info = computed(() => PROVIDERS.find((p) => p.id === c.value.provider)!);
 /** does the server keep connections on disk (REPORTTOOL_SAVE_CONNECTIONS=1)? */
 const savesConnections = ref(false);
+/** no ReportTool server on this website: say so before anyone types a server password */
+const noService = ref('');
 void serverHealth()
   .then((h) => (savesConnections.value = !!h.savesConnections))
-  .catch(() => undefined);
+  .catch((e) => {
+    if (e instanceof DbError && e.noService) noService.value = e.message;
+  });
 const isFile = computed(() => c.value.provider === 'sqlite');
 
 function setProvider(p: Provider) {
@@ -63,7 +67,7 @@ function normalizeMssql() {
   }
   const instPort = /^(.*?)\s*,\s*(\d+)$/.exec(inst);
   if (instPort) {
-    // "server, 1119" typed into Instance -> it is a server + port, not an instance
+    // "server, 1433" typed into Instance -> it is a server + port, not an instance
     if (!host) host = instPort[1];
     v.port = Number(instPort[2]);
     inst = '';
@@ -123,6 +127,10 @@ async function save() {
 <template>
   <Modal :title="editing ? 'Edit Database Connection' : 'New Database Connection'" :width="640" @close="emit('close')">
     <template #icon><Database :size="16" /></template>
+    <div v-if="noService" class="row err" style="align-items: flex-start; margin-bottom: 12px">
+      <CircleX :size="16" style="flex: none" />
+      <span>{{ noService }}</span>
+    </div>
     <div class="form-grid" style="grid-template-columns: 150px 1fr">
       <label>Database type</label>
       <select :value="c.provider" @change="setProvider(($event.target as HTMLSelectElement).value as Provider)">
@@ -200,10 +208,10 @@ async function save() {
       <span style="word-break: break-word">{{ result.text }}</span>
     </div>
     <template #footer>
-      <button class="btn" :disabled="testing" @click="test"><PlugZap :size="14" /> {{ testing ? 'Testing…' : 'Test connection' }}</button>
+      <button class="btn" :disabled="testing || !!noService" @click="test"><PlugZap :size="14" /> {{ testing ? 'Testing…' : 'Test connection' }}</button>
       <span class="grow" />
       <button class="btn" @click="emit('close')">Cancel</button>
-      <button class="btn primary" :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
+      <button class="btn primary" :disabled="saving || !!noService" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
     </template>
   </Modal>
 </template>

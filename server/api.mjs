@@ -1,5 +1,6 @@
 // HTTP API for database access. Mounted as connect-style middleware (Vite dev server) or by server/index.mjs.
 import { ApiError } from './common.mjs';
+import { AUTH_ENABLED, login, logout, signedIn } from './auth.mjs';
 import { deleteConnection, getConnection, listConnections, needsPassword, PERSIST, publicConn, saveConnection, setPassword, validate } from './store.mjs';
 
 const DRIVERS = {
@@ -22,8 +23,9 @@ const EXTRA_HOSTS = (process.env.REPORTTOOL_ALLOWED_HOSTS ?? '')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
+// With a team password (REPORTTOOL_PASSWORD) the API may be used from any address: sign-in protects it.
 const hostAllowed = (host) =>
-  !!process.env.REPORTTOOL_ALLOW_REMOTE || LOCAL_HOSTS.test(host) || EXTRA_HOSTS.includes(host.toLowerCase().replace(/:\d+$/, ''));
+  AUTH_ENABLED || !!process.env.REPORTTOOL_ALLOW_REMOTE || LOCAL_HOSTS.test(host) || EXTRA_HOSTS.includes(host.toLowerCase().replace(/:\d+$/, ''));
 
 function send(res, status, body) {
   const json = JSON.stringify(body);
@@ -76,7 +78,6 @@ function friendly(e) {
 
 async function route(method, url, body) {
   const path = url.split('?')[0];
-  if (method === 'GET' && path === '/api/health') return { ok: true, providers: Object.keys(DRIVERS), savesConnections: PERSIST };
   if (method === 'GET' && path === '/api/connections') return listConnections();
   if (method === 'POST' && path === '/api/connections') return saveConnection(body);
   let m = /^\/api\/connections\/([^/]+)$/.exec(path);
@@ -133,14 +134,33 @@ export function createApiHandler() {
     const url = req.url ?? '';
     if (!url.startsWith('/api/')) return next ? next() : send(res, 404, { error: 'Not found' });
     // design-only deployment (the host systems send the data): no database access at all
-    if (process.env.REPORTTOOL_DISABLE_DB) return send(res, 404, { error: 'Database access is turned off on this server' });
+    if (process.env.REPORTTOOL_DISABLE_DB) return send(res, 404, { error: 'Database access is turned off on this server.', noService: true });
     // Only answer requests made by the ReportTool UI itself:
     //  - Host must be localhost or a name listed in REPORTTOOL_ALLOWED_HOSTS (blocks DNS-rebinding)
     //  - custom header required (a cross-site page cannot send it without a CORS preflight, which we never allow)
-    if (!hostAllowed(req.headers.host ?? '')) return send(res, 403, { error: 'Forbidden host' });
+    if (!hostAllowed(req.headers.host ?? '')) {
+      return send(res, 403, {
+        error: 'Database access from the internet is turned off on this server. The server owner can turn it on by setting a team password (REPORTTOOL_PASSWORD).',
+        noService: true,
+      });
+    }
     if (req.method === 'OPTIONS' || req.headers['x-reporttool'] !== '1') return send(res, 403, { error: 'Forbidden' });
     try {
+      const path = url.split('?')[0];
       const body = req.method === 'POST' ? await readJson(req) : {};
+      if (req.method === 'GET' && path === '/api/health') {
+        return send(res, 200, { ok: true, providers: Object.keys(DRIVERS), savesConnections: PERSIST, auth: AUTH_ENABLED, signedIn: signedIn(req) });
+      }
+      // team password (REPORTTOOL_PASSWORD): sign in / out, everything else needs a signed-in browser
+      if (req.method === 'POST' && path === '/api/auth/login') {
+        const r = login(req, res, body.password);
+        return send(res, r.status, r.body);
+      }
+      if (req.method === 'POST' && path === '/api/auth/logout') {
+        const r = logout(req, res);
+        return send(res, r.status, r.body);
+      }
+      if (!signedIn(req)) return send(res, 401, { error: 'Sign in with the team password to use database connections.', authRequired: true });
       send(res, 200, await route(req.method, url, body));
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 400;

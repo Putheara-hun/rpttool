@@ -27,14 +27,54 @@ function load() {
     conns = new Map();
   }
 }
+
+/**
+ * Connections set up by the server owner (e.g. a secret environment variable on Render), with their passwords:
+ *   REPORTTOOL_CONNECTIONS='[{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,
+ *                             "database":"SalesDB","user":"report_reader","password":"..."}]'
+ * They exist from start-up (also after a restart), keep a fixed id, and cannot be changed or deleted in the designer.
+ */
+function loadFixed() {
+  const raw = process.env.REPORTTOOL_CONNECTIONS;
+  if (!raw?.trim()) return;
+  let list;
+  try {
+    list = JSON.parse(raw);
+  } catch (e) {
+    console.error('REPORTTOOL_CONNECTIONS is not valid JSON:', e.message);
+    return;
+  }
+  for (const input of [].concat(list)) {
+    try {
+      validate(input);
+      const name = String(input.name).trim();
+      const id = 'env-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const c = { ...pick(input), id, name, fixed: true };
+      delete c.savePassword;
+      conns.set(id, c);
+      if (typeof input.password === 'string') memory.set(id, input.password);
+      console.log(`Database connection from REPORTTOOL_CONNECTIONS: ${name}`);
+    } catch (e) {
+      console.error('REPORTTOOL_CONNECTIONS entry skipped:', e.message);
+    }
+  }
+}
+
+/**
+ * Same server + database + login -> same id. Connections are kept in memory, so after a restart a report's
+ * connection is gone; creating it again with the same details brings back the id the report refers to.
+ */
+function stableId(c) {
+  const key = ['provider', 'host', 'port', 'instance', 'database', 'user', 'auth', 'domain', 'file', 'connectString'].map((k) => String(c[k] ?? '').trim().toLowerCase()).join('|');
+  return 'c-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
 function persist() {
   if (!PERSIST) return;
   fs.mkdirSync(DIR, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify([...conns.values()], null, 2), { mode: 0o600 });
+  // connections from REPORTTOOL_CONNECTIONS come from the environment every start: never written to disk
+  fs.writeFileSync(FILE, JSON.stringify([...conns.values()].filter((c) => !c.fixed), null, 2), { mode: 0o600 });
 }
-load();
-
-const pick = (c) => Object.fromEntries(FIELDS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]));
+const pick =(c) => Object.fromEntries(FIELDS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]));
 const hasPassword = (c) => c.provider === 'sqlite' || memory.has(c.id) || typeof c.password === 'string';
 
 /** Public view: never includes the password. */
@@ -61,10 +101,20 @@ export function validate(c) {
   if (c.provider === 'sqlite' && !String(c.file ?? '').trim()) throw new Error('Enter the SQLite file path.');
 }
 
+const FIXED_MSG = 'This connection is set up on the server (REPORTTOOL_CONNECTIONS) and cannot be changed or deleted here.';
+
 export function saveConnection(input) {
   validate(input);
-  const id = input.id && conns.has(input.id) ? input.id : crypto.randomUUID();
-  const dup = [...conns.values()].find((x) => x.name.toLowerCase() === String(input.name).trim().toLowerCase() && x.id !== id);
+  let id;
+  if (input.id && conns.has(input.id)) {
+    if (conns.get(input.id).fixed) throw new Error(FIXED_MSG);
+    id = input.id;
+  } else {
+    id = stableId(input);
+    const same = conns.get(id);
+    if (same) throw new Error(`This connection already exists as "${same.name}".`);
+  }
+  const dup =[...conns.values()].find((x) => x.name.toLowerCase() === String(input.name).trim().toLowerCase() && x.id !== id);
   if (dup) throw new Error(`A connection named "${input.name}" already exists.`);
   const prev = conns.get(id);
   const c = { ...pick(input), id, name: String(input.name).trim() };
@@ -82,6 +132,7 @@ export function setPassword(id, password) {
 }
 
 export function deleteConnection(id) {
+  if (conns.get(id)?.fixed) throw new Error(FIXED_MSG);
   memory.delete(id);
   const ok = conns.delete(id);
   persist();
@@ -91,3 +142,6 @@ export function deleteConnection(id) {
 export function needsPassword(c) {
   return !hasPassword(c);
 }
+
+load();
+loadFixed();

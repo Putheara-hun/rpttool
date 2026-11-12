@@ -1,5 +1,6 @@
-// Production server: serves the built designer (dist/) and the database API on localhost.
+// Production server: serves the built designer (dist/) and the database API.
 //   npm run build && npm start      ->  http://localhost:5174
+// Online (e.g. Render): HOST=0.0.0.0 and REPORTTOOL_PASSWORD=<team password> (the database API then needs sign-in).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,9 +37,14 @@ function serveStatic(req, res) {
     res.statusCode = 404;
     return res.end('Build the app first: npm run build');
   }
-  res.setHeader('Content-Type', TYPES[path.extname(file)] ?? 'application/octet-stream');
-  // which systems may show the designer in an iframe, e.g. REPORTTOOL_FRAME_ANCESTORS="https://erp.example.com https://hr.example.com"
-  if (FRAME_ANCESTORS && path.extname(file) === '.html') res.setHeader('Content-Security-Policy', `frame-ancestors 'self' ${FRAME_ANCESTORS}`);
+  const ext = path.extname(file);
+  res.setHeader('Content-Type', TYPES[ext] ?? 'application/octet-stream');
+  // which other systems may show the designer in an iframe, e.g. REPORTTOOL_FRAME_ANCESTORS="https://erp.example.com https://hr.example.com"
+  // (none by default: no other site can frame a designer that has database access)
+  if (ext === '.html') res.setHeader('Content-Security-Policy', `frame-ancestors 'self'${FRAME_ANCESTORS ? ' ' + FRAME_ANCESTORS : ''}`);
+  // Vite puts a content hash in /assets/* names -> cache forever; everything else (index.html, embed.js) -> check each time
+  res.setHeader('Cache-Control', urlPath.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   fs.createReadStream(file).pipe(res);
 }
 

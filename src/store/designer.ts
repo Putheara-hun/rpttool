@@ -22,7 +22,7 @@ import {
   type ToolId,
 } from '../model/defaults';
 import { inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
-import { DbError, listConnections, resolveSqlParams } from '../data/dbApi';
+import { DbError, listConnections, resolveSqlParams, setAuthHandler } from '../data/dbApi';
 import { compileCalcFields, paramValues, renderReport } from '../engine/renderer';
 import {
   cellOwners,
@@ -57,6 +57,7 @@ export type DialogType =
   | 'wizard'
   | 'detailReports'
   | 'saveInfo'
+  | 'reportText'
   | 'about';
 
 export interface ExprRequest {
@@ -91,6 +92,8 @@ export const state = reactive({
   dialogProps: null as any,
   exprRequest: null as ExprRequest | null,
   loginRequests: [] as LoginRequest[],
+  /** open sign-in dialog for the team password (REPORTTOOL_PASSWORD on the server) */
+  siteLogin: null as { resolve: (ok: boolean) => void } | null,
   formatBrush: null as FormatBrush | null,
   fileName: 'report.rptx',
   dirty: false,
@@ -1658,6 +1661,24 @@ export function requestLogin(connectionId: string, name: string): Promise<boolea
   }
   return p;
 }
+
+/** The server has a team password: ask for it once (several waiting requests share the one dialog). */
+let pendingSiteLogin: Promise<boolean> | null = null;
+export function requestSiteLogin(): Promise<boolean> {
+  if (!pendingSiteLogin) {
+    pendingSiteLogin = new Promise<boolean>((resolve) => {
+      state.siteLogin = {
+        resolve: (ok) => {
+          state.siteLogin = null;
+          pendingSiteLogin = null;
+          resolve(ok);
+        },
+      };
+    });
+  }
+  return pendingSiteLogin;
+}
+setAuthHandler(requestSiteLogin);
 
 // ------------------------------------------------------------------ file
 export function loadReport(def: ReportDef, fileName?: string) {
