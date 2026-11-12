@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReportTool — embed demo (host system)</title>
+    <style>
+      :root {
+        --b: #d0d7e2;
+        --a: #2563eb;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font: 13px system-ui, 'Segoe UI', sans-serif;
+        display: grid;
+        grid-template-columns: 300px 1fr;
+        height: 100vh;
+        background: #f1f5f9;
+        color: #111827;
+      }
+      aside {
+        border-right: 1px solid var(--b);
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0;
+        padding: 12px;
+        background: #0f766e;
+        color: #fff;
+      }
+      h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        color: #64748b;
+        margin: 12px 12px 6px;
+      }
+      .row {
+        display: flex;
+        gap: 6px;
+        padding: 0 12px;
+        flex-wrap: wrap;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 4px 10px;
+        border: 1px solid var(--b);
+        border-radius: 4px;
+        background: #fff;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--a);
+        border-color: var(--a);
+        color: #fff;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0 8px;
+      }
+      li {
+        padding: 6px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+      }
+      li.sel {
+        background: #dbeafe;
+      }
+      li small {
+        color: #64748b;
+      }
+      textarea {
+        margin: 6px 12px 12px;
+        flex: 1;
+        min-height: 120px;
+        font: 11px Consolas, monospace;
+        border: 1px solid var(--b);
+        border-radius: 4px;
+        resize: none;
+      }
+      #log {
+        margin: 0 12px;
+        font-size: 12px;
+        color: #0f766e;
+        min-height: 18px;
+      }
+      main {
+        min-width: 0;
+        min-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <h1>Host system (demo)</h1>
+      <h2>Reports in "database"</h2>
+      <ul id="list"></ul>
+      <div class="row" style="margin-top: 8px">
+        <button id="new">New report</button>
+        <button id="sample">Send sample data</button>
+      </div>
+      <h2>Save format</h2>
+      <div class="row">
+        <select id="fmt">
+          <option value="json">JSON (design)</option>
+          <option value="xml">XML (RDL)</option>
+          <option value="html">HTML (report + design)</option>
+        </select>
+        <button id="get">Get output now</button>
+      </div>
+      <div id="log"></div>
+      <h2>Last text received</h2>
+      <textarea id="out" readonly></textarea>
+    </aside>
+    <main id="designer"></main>
+
+    <script src="./embed.js"></script>
+    <script>
+      // A stand-in for the host system: reports are stored as TEXT (here in localStorage = "database").
+      const KEY = 'host-demo-reports';
+      const db = () => JSON.parse(localStorage.getItem(KEY) || '[]');
+      const store = (rows) => localStorage.setItem(KEY, JSON.stringify(rows));
+      let current = null; // id of the report being edited
+      const $ = (id) => document.getElementById(id);
+      const log = (t) => ($('log').textContent = t);
+
+      function render() {
+        $('list').innerHTML = '';
+        for (const r of db()) {
+          const li = document.createElement('li');
+          li.className = r.id === current ? 'sel' : '';
+          li.innerHTML = `<span></span><small>${r.format} · ${(r.content.length / 1024).toFixed(1)} KB</small>`;
+          li.firstChild.textContent = r.name;
+          li.onclick = () => open(r.id);
+          $('list').appendChild(li);
+        }
+      }
+
+      const designer = ReportTool.embed($('designer'), {
+        url: './',
+        format: $('fmt').value,
+        formats: ['json', 'xml', 'html'],
+        title: 'Report designer',
+        onReady: () => log('Designer ready'),
+        onChange: (dirty) => log(dirty ? 'Unsaved changes' : 'All changes saved'),
+        // the user clicked Save in the designer: store the text in the "database"
+        onSave: async (out) => {
+          const rows = db();
+          let row = rows.find((r) => r.id === current);
+          if (!row) {
+            row = { id: 'rep' + Date.now() };
+            rows.push(row);
+            current = row.id;
+          }
+          Object.assign(row, { name: out.name, format: out.format, mimeType: out.mimeType, content: out.content, savedAt: new Date().toISOString() });
+          store(rows);
+          $('out').value = out.content;
+          log(`Saved "${out.name}" as ${out.format} (${out.content.length} characters)`);
+          render();
+        },
+      });
+
+      async function open(id) {
+        const row = db().find((r) => r.id === id);
+        if (!row) return;
+        current = id;
+        await designer.load(row.content, { format: row.format, name: row.name });
+        log(`Opened "${row.name}"`);
+        render();
+      }
+      $('new').onclick = async () => {
+        current = null;
+        await designer.newReport('New Report');
+        log('New report');
+        render();
+      };
+      $('fmt').onchange = () => designer.setFormats(['json', 'xml', 'html'], $('fmt').value);
+      $('get').onclick = async () => {
+        const out = await designer.getOutput($('fmt').value);
+        $('out').value = out.content;
+        log(`Output ${out.format}: ${out.content.length} characters`);
+      };
+      $('sample').onclick = async () => {
+        const rows = [
+          { EMP_CODE: 'E001', NAME: 'Sok Dara', BRANCH: 'Phnom Penh', AMOUNT: 1200.5 },
+          { EMP_CODE: 'E002', NAME: 'Chan Sophea', BRANCH: 'Siem Reap', AMOUNT: 860 },
+          { EMP_CODE: 'E003', NAME: 'Kim Rithy', BRANCH: 'Phnom Penh', AMOUNT: 2400 },
+        ];
+        await designer.setData('Loans', rows);
+        log('Sample data "Loans" sent — see Field List');
+      };
+      render();
+    </script>
+  </body>
+</html>

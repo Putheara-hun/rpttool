@@ -1,0 +1,45 @@
+# Render Blueprint - hosts the ReportTool designer for embedding in other systems.
+#
+# Design-only hosting: the designer runs completely in the browser. Your system sends the data
+# (designer.setData) and saves the report text it gets back (onSave), so no server code runs here.
+# That is why this is a static site: free, never sleeps, served from Render's CDN, and the
+# database API (server/) is not exposed on the internet.
+#
+# Deploy: push this project to GitHub/GitLab, then in Render choose New > Blueprint and pick the repository.
+# After the deploy:
+#   designer:   https://<service>.onrender.com/
+#   embed SDK:  https://<service>.onrender.com/embed.js
+#   demo host:  https://<service>.onrender.com/embed-demo.html
+
+services:
+  - type: web
+    runtime: static
+    name: reporttool
+    # --include=dev: the build needs vite / vue-tsc from devDependencies
+    buildCommand: npm ci --include=dev && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+    headers:
+      # Which systems may show the designer in an iframe.
+      # EDIT THIS LINE: replace https://erp.example.com with the address of each system that embeds
+      # the designer, separated by spaces (e.g. https://erp.mycompany.com https://hr.mycompany.com).
+      # 'self' keeps /embed-demo.html working.
+      - path: /*
+        name: Content-Security-Policy
+        value: "frame-ancestors 'self' https://erp.example.com"
+      # embed.js has a fixed name: make browsers check for a new version on every page load
+      - path: /embed.js
+        name: Cache-Control
+        value: no-cache
+      - path: /
+        name: Cache-Control
+        value: no-cache
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
+      # Vite puts a content hash in these file names, so they can be cached forever
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable

@@ -1,0 +1,31 @@
+{
+  "name": "report-tool",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ReportTool - a browser based banded report designer (layout, data binding, grouping, summaries, preview, export).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "start": "node server/index.mjs",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "jspdf": "^4.2.1",
+    "lucide-vue-next": "^0.460.0",
+    "mssql": "^12.7.14",
+    "mysql2": "^3.24.6",
+    "oracledb": "^26.0.0",
+    "pg": "^8.23.1",
+    "qrcode-generator": "^1.4.4",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "^5.7.3",
+    "vite": "^6.4.6",
+    "vue-tsc": "^3.3.14"
+  }
+}
