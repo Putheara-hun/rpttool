@@ -151,7 +151,7 @@ function runSearch(dir = 1) {
   if (m) goto(m.page + 1, m.y);
 }
 
-async function doExport(kind: 'pdf' | 'xlsx' | 'csv' | 'html' | 'png') {
+async function doExport(kind: 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png') {
   exportOpen.value = false;
   if (!doc.value) return;
   const ex = await import('../export');
@@ -161,7 +161,8 @@ async function doExport(kind: 'pdf' | 'xlsx' | 'csv' | 'html' | 'png') {
   try {
     await new Promise((r) => setTimeout(r, 20));
     if (kind === 'pdf') ex.downloadBlob(await ex.exportPdf(doc.value, state.report.name, (n) => (busyText.value = `Exporting PDF… page ${n}/${pageCount.value}`)), base + '.pdf');
-    else if (kind === 'xlsx') ex.downloadBlob(ex.exportXlsx(doc.value, state.report.name), base + '.xlsx');
+    else if (kind === 'xlsx') ex.downloadBlob(await ex.exportXlsx(doc.value, state.report.name, { margins: state.report.page.margins }), base + '.xlsx');
+    else if (kind === 'docx') ex.downloadBlob(await ex.exportDocx(doc.value, state.report.name), base + '.docx');
     else if (kind === 'csv') ex.downloadBlob(ex.exportCsv(doc.value), base + '.csv');
     else if (kind === 'html') ex.downloadBlob(new Blob([ex.exportHtml(doc.value, state.report.name)], { type: 'text/html' }), base + '.html');
     else {
@@ -242,6 +243,7 @@ onMounted(() => {
         <div v-if="exportOpen" class="dropdown-menu" style="left: auto; right: 0">
           <button class="menu-item" @click="doExport('pdf')"><FileText :size="15" /> PDF document (.pdf)</button>
           <button class="menu-item" @click="doExport('xlsx')"><FileSpreadsheet :size="15" /> Excel workbook (.xlsx)</button>
+          <button class="menu-item" @click="doExport('docx')"><FileText :size="15" /> Word document (.docx)</button>
           <button class="menu-item" @click="doExport('csv')"><FileSpreadsheet :size="15" /> CSV file (.csv)</button>
           <button class="menu-item" @click="doExport('html')"><FileCode :size="15" /> Web page (.html)</button>
           <button class="menu-item" @click="doExport('png')"><FileImage :size="15" /> Image (.png / zip)</button>

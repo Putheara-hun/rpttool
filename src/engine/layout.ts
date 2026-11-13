@@ -227,7 +227,9 @@ function layoutText(el: TextElement, env: LayoutEnv, st: ResolvedStyle): Element
   const v = boundValue(env, el.text, el.expression, el.format, el.summaryFunc, el.summaryRunning, el.nullText);
   const r = textBox(v.text, el.width, el.height, st, { wordWrap: el.wordWrap, canGrow: el.canGrow, canShrink: el.canShrink });
   const cells: CellInfo[] =
-    r.height > 0 ? [{ x: 0, y: 0, w: el.width, h: r.height, text: v.text, value: el.expression ? v.value : v.text, bold: st.bold, align: st.textAlign, band: env.bandType }] : [];
+    r.height > 0
+      ? [{ x: 0, y: 0, w: el.width, h: r.height, text: v.text, value: el.expression ? v.value : v.text, bold: st.bold, align: st.textAlign, band: env.bandType, style: st, wrap: el.wordWrap }]
+      : [];
   return { prims: r.prims, height: r.height, cells };
 }
 
@@ -499,6 +501,8 @@ function layoutTable(el: TableElement, env: LayoutEnv, st0: ResolvedStyle, ruleS
         bold: it.st.bold,
         align: it.st.textAlign,
         band: env.bandType,
+        style: it.st,
+        wrap: it.wrap,
       });
   }
   prims.push(...borders);
@@ -517,7 +521,7 @@ function layoutCrosstab(el: CrosstabElement, env: LayoutEnv, st: ResolvedStyle):
   const rowHeadSt: ResolvedStyle = { ...st, bold: true, backColor: el.headerBackColor || st.backColor, vAlign: 'middle' };
   const put = (text: string, x: number, y: number, w: number, s: ResolvedStyle, value: unknown = text) => {
     prims.push(...textBox(text, w, rh, s, opts).prims.map((p) => shiftPrim(p, x, y)));
-    if (!env.design) cells.push({ x, y, w, h: rh, text, value, bold: s.bold, align: s.textAlign, band: env.bandType });
+    if (!env.design) cells.push({ x, y, w, h: rh, text, value, bold: s.bold, align: s.textAlign, band: env.bandType, style: s });
   };
   if (env.design || !el.rowField || !el.columnField) {
     const cw = el.cellWidth;

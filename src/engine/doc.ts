@@ -1,5 +1,5 @@
 // Rendered document model: device independent drawing primitives in px (96 DPI).
-import type { HAlign, ImageSizing, LineStyle, Watermark } from '../model/types';
+import type { HAlign, ImageSizing, LineStyle, ResolvedStyle, Watermark } from '../model/types';
 import type { FontSpec } from './measure';
 
 export interface PRect {
@@ -102,6 +102,12 @@ export interface CellInfo {
   bold?: boolean;
   align?: string;
   band: string;
+  /** the text box's look (font, colours, alignment) — Excel / Word keep it */
+  style?: ResolvedStyle;
+  /** the text wraps onto several lines */
+  wrap?: boolean;
+  /** printed again at the top of a new page (repeated group header): left out of a continuous sheet */
+  repeat?: boolean;
 }
 
 export interface Bookmark {

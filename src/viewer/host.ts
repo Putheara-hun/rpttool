@@ -22,7 +22,7 @@ import type { Row } from '../model/types';
 import type { OpenOptions } from './load';
 import { hostLayout, setLabels, setTheme } from './labels';
 
-export type ExportFormat = 'pdf' | 'xlsx' | 'csv' | 'html' | 'png';
+export type ExportFormat = 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png';
 export interface ViewerController {
   open(text: string, o: OpenOptions): Promise<{ name: string; warnings: string[] }>;
   setData(name: string | null, rows: Row[]): Promise<void>;
@@ -74,7 +74,7 @@ export function initViewerHost(): boolean {
   return true;
 }
 
-const FORMATS: ExportFormat[] = ['pdf', 'xlsx', 'csv', 'html', 'png'];
+const FORMATS: ExportFormat[] = ['pdf', 'xlsx', 'docx', 'csv', 'html', 'png'];
 
 async function onMessage(e: MessageEvent) {
   if (!target || e.source !== target) return;

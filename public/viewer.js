@@ -20,7 +20,7 @@
  *   viewer.load(await (await fetch('/api/report/42')).json());   // or your API's { report, data, params } as is
  *   viewer.setData('DataSet1', rows);              // new rows, re-rendered
  *   viewer.setParams({ BRANCH: 'HQ' });            // new parameter values, re-rendered
- *   viewer.print();  viewer.exportAs('pdf');       // pdf | xlsx | csv | html | png
+ *   viewer.print();  viewer.exportAs('pdf');       // pdf | xlsx | docx | csv | html | png
  *
  *   // in a new browser tab (call it from a click, or the browser blocks the tab)
  *   ReportViewer.open({ report: textFromDatabase, data, params });
@@ -131,7 +131,7 @@
       print: function () {
         return request('print');
       },
-      /** 'pdf' | 'xlsx' | 'csv' | 'html' | 'png' — the file is downloaded by the browser */
+      /** 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png' — the file is downloaded by the browser */
       exportAs: function (format) {
         return request('export', { format: format || 'pdf' });
       },

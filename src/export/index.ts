@@ -2,11 +2,13 @@
 import { zipSync } from 'fflate';
 import type { RenderedDoc, RenderedPage } from '../engine/doc';
 import { escXml, pageToSvg } from './svg';
-import { svgToCanvas, toDataUrl } from './raster';
+import { svgToCanvas } from './raster';
+import { inlinePage } from './inline';
 import { embeddedFontCss, googleFontsLink } from '../engine/fonts';
 
 export { exportPdf } from './pdf';
 export { exportXlsx, exportCsv } from './xlsx';
+export { exportDocx } from './docx';
 
 export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -102,30 +104,6 @@ export function printDoc(doc: RenderedDoc, title: string) {
   // wait for Google fonts (if any) before printing
   const fontsReady = (idoc as Document).fonts?.ready ?? Promise.resolve();
   void Promise.race([fontsReady, new Promise((r) => setTimeout(r, 4000))]).then(() => setTimeout(go, 300));
-}
-
-async function inlinePage(p: RenderedPage): Promise<RenderedPage> {
-  const prims = await Promise.all(
-    p.prims.map(async (q) => {
-      if (q.k === 'image' && !q.src.startsWith('data:')) {
-        try {
-          return { ...q, src: await toDataUrl(q.src) };
-        } catch {
-          return q;
-        }
-      }
-      return q;
-    }),
-  );
-  let watermark = p.watermark;
-  if (watermark?.image && !watermark.image.startsWith('data:')) {
-    try {
-      watermark = { ...watermark, image: await toDataUrl(watermark.image) };
-    } catch {
-      /* ignore */
-    }
-  }
-  return { ...p, prims, watermark };
 }
 
 export async function pageToPng(p: RenderedPage, scale = 2): Promise<Blob> {

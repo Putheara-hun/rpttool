@@ -7,16 +7,8 @@ import { pageToSvg } from '../export/svg';
 import type { Row } from '../model/types';
 import { dataErrors, ensureData, rowsFor, state } from '../store/designer';
 import { labels, prefs, setLayout } from './labels';
-
-/**
- * The Report Viewer's screen, in the look of the host application's own report viewer: page navigation, zoom,
- * find, export, print and refresh — no parameters panel (the application chooses the criteria, runs its query and
- * sends the rows). Pages: one at a time (scrolling past a page's end opens the next one) or all one after another.
- * Right-click a page to copy a value, a row, the page or the whole report as text.
- */
 const emit = defineEmits<{ rendered: [pages: number]; failed: [message: string]; refresh: [] }>();
 const L = labels;
-
 const doc = shallowRef<RenderedDoc | null>(null);
 const busy = ref(false);
 const error = ref('');
@@ -26,15 +18,11 @@ const scrollTop = ref(0);
 const isScroll = computed(() => prefs.layout === 'scroll');
 const GAP = 18;
 const PAD = 20;
-
-// ---- zoom (percent, like the application's viewer)
 const zoom = ref(100);
 const scale = computed(() => zoom.value / 100);
 function setZoom(v: string | number) {
   zoom.value = Math.min(200, Math.max(50, Math.trunc(Number(v)) || 100));
 }
-
-// ---- pages: where each one starts in the continuous layout
 const tops = computed(() => {
   const out: number[] = [];
   let y = PAD;
@@ -44,11 +32,8 @@ const tops = computed(() => {
   }
   return out;
 });
-
-// ---- paging
 const page = ref(1);
 const totalPages = computed(() => Math.max(1, doc.value?.pages.length ?? 1));
-/** show page n (1-based); y = a point on that page to bring into view (find) */
 function goTo(n: number, y = 0) {
   const t = Math.min(Math.max(1, Math.trunc(n) || 1), totalPages.value);
   page.value = t;
@@ -57,7 +42,7 @@ function goTo(n: number, y = 0) {
     if (!el) return;
     const focus = y ? y * scale.value - viewH.value / 3 : -10;
     el.scrollTop = Math.max(0, (isScroll.value ? tops.value[t - 1] ?? 0 : 0) + focus);
-    updateRest(); // a page that fits the view is at its end right away
+    updateRest(); 
   });
 }
 const goFirst = () => goTo(1);
@@ -338,7 +323,7 @@ const onDocPointer = (e: MouseEvent) => {
   if (exportRoot.value && !exportRoot.value.contains(e.target as Node)) exportOpen.value = false;
   if (menuEl.value && !menuEl.value.contains(e.target as Node)) menu.value = null;
 };
-async function exportAs(kind: 'pdf' | 'xlsx' | 'csv' | 'html' | 'png') {
+async function exportAs(kind: 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png') {
   exportOpen.value = false;
   if (!doc.value) return;
   const ex = await import('../export');
@@ -347,7 +332,8 @@ async function exportAs(kind: 'pdf' | 'xlsx' | 'csv' | 'html' | 'png') {
   try {
     await new Promise((r) => setTimeout(r, 10));
     if (kind === 'pdf') ex.downloadBlob(await ex.exportPdf(doc.value, state.report.name), base + '.pdf');
-    else if (kind === 'xlsx') ex.downloadBlob(ex.exportXlsx(doc.value, state.report.name), base + '.xlsx');
+    else if (kind === 'xlsx') ex.downloadBlob(await ex.exportXlsx(doc.value, state.report.name, { margins: state.report.page.margins }), base + '.xlsx');
+    else if (kind === 'docx') ex.downloadBlob(await ex.exportDocx(doc.value, state.report.name), base + '.docx');
     else if (kind === 'csv') ex.downloadBlob(ex.exportCsv(doc.value), base + '.csv');
     else if (kind === 'html') ex.downloadBlob(new Blob([ex.exportHtml(doc.value, state.report.name)], { type: 'text/html' }), base + '.html');
     else {
@@ -445,6 +431,7 @@ onBeforeUnmount(() => {
         </button>
         <div v-if="exportOpen" class="exp-menu">
           <button type="button" @click="exportAs('xlsx')">{{ L.rpt_export_excel }}</button>
+          <button type="button" @click="exportAs('docx')">{{ L.rpt_export_word }}</button>
           <button type="button" @click="exportAs('pdf')">{{ L.rpt_export_pdf }}</button>
           <button type="button" @click="exportAs('html')">{{ L.rpt_export_html }}</button>
           <button type="button" @click="exportAs('csv')">{{ L.rpt_export_csv }}</button>

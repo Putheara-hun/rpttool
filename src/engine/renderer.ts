@@ -228,7 +228,7 @@ export function renderReport(inp: RenderInput): RenderedDoc {
         openGroups.forEach((g, lvl) => {
           if (g.band && g.env && g.band.repeatEveryPage) {
             const L = layoutBand(g.band, r.elements, { ...g.env, ctx: { ...g.env.ctx, page: pages.length } }, contentW);
-            if (L.height <= bodyBottom - y) emit({ ...L, bookmarks: [] }, lvl);
+            if (L.height <= bodyBottom - y) emit({ ...L, bookmarks: [], cells: L.cells.map((c) => ({ ...c, repeat: true })) }, lvl);
           }
         });
       } finally {

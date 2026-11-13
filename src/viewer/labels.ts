@@ -13,6 +13,7 @@ export const DEFAULT_LABELS = {
   rpt_zoom: 'Zoom',
   rpt_export: 'Export',
   rpt_export_excel: 'Excel (.xlsx)',
+  rpt_export_word: 'Word (.docx)',
   rpt_export_pdf: 'PDF',
   rpt_export_html: 'HTML',
   rpt_export_csv: 'CSV',
