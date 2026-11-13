@@ -32,6 +32,14 @@ export const DEFAULT_LABELS = {
   rpt_loading: 'Loading…',
   rpt_waiting: 'Waiting for the report…',
   rpt_data_source: 'Data source',
+  rpt_layout_scroll: 'Continuous scroll (all pages one after another)',
+  rpt_layout_page: 'One page at a time',
+  rpt_copy: 'Copy',
+  rpt_copy_value: 'Copy value',
+  rpt_copy_row: 'Copy row',
+  rpt_copy_page: 'Copy page {n}',
+  rpt_copy_all: 'Copy all pages',
+  rpt_copied: 'Copied',
 };
 export type LabelKey = keyof typeof DEFAULT_LABELS;
 
@@ -41,6 +49,44 @@ export const labels = reactive({ ...DEFAULT_LABELS });
 export function setLabels(v: Record<string, unknown> | undefined) {
   if (!v || typeof v !== 'object') return;
   for (const [k, text] of Object.entries(v)) if (k in DEFAULT_LABELS && typeof text === 'string' && text.trim()) labels[k as LabelKey] = text;
+}
+
+/**
+ * How pages are shown: 'page' = one page at a time (scrolling past its end opens the next one),
+ * 'scroll' = all pages one after another. The user's choice is remembered in this browser.
+ */
+export type Layout = 'page' | 'scroll';
+const LAYOUT_KEY = 'reportviewer.layout';
+function storedLayout(): Layout {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY);
+    return v === 'scroll' || v === 'page' ? v : 'page';
+  } catch {
+    return 'page';
+  }
+}
+export const prefs = reactive({ layout: storedLayout() });
+let userChose = (() => {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) !== null;
+  } catch {
+    return false;
+  }
+})();
+/** the user's choice (toolbar button): applied and remembered */
+export function setLayout(v: unknown) {
+  if (v !== 'page' && v !== 'scroll') return;
+  prefs.layout = v;
+  userChose = true;
+  try {
+    localStorage.setItem(LAYOUT_KEY, v);
+  } catch {
+    /* storage blocked: the choice lasts until the page is closed */
+  }
+}
+/** the application's default: used until the user picks a layout themselves */
+export function hostLayout(v: unknown) {
+  if ((v === 'page' || v === 'scroll') && !userChose) prefs.layout = v;
 }
 
 /** light / dark, like the host application (its theme variables are defined in viewer.css) */

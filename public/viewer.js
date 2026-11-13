@@ -10,6 +10,8 @@
  *     params: { TITLE: 'Loan Outstanding' },       // optional: report parameter values
  *     labels: { rpt_print: 'Print', … },           // optional: the viewer's words (your translations)
  *     theme: 'light',                              // optional: 'light' | 'dark'
+ *     layout: 'scroll',                            // optional: 'scroll' (all pages one after another) | 'page' (one at a time);
+ *                                                  //   a default — the user's own choice in the toolbar wins
  *     onRendered: (pages) => {},                   // optional
  *     onRefresh: () => {},                         // optional: the user clicked Refresh (send fresh rows)
  *     onError: (err) => alert(err.message),        // optional
@@ -76,7 +78,7 @@
       }
       if (type === 'ready') {
         // words and theme first, so the report never shows in the wrong language / colours
-        if (opts.labels || opts.theme) post('init', { labels: opts.labels, theme: opts.theme });
+        if (opts.labels || opts.theme || opts.layout) post('init', { labels: opts.labels, theme: opts.theme, layout: opts.layout });
         resolveReady(m);
         if (opts.onReady) opts.onReady(m);
       } else if (type === 'rendered') {
@@ -111,8 +113,12 @@
       setTheme: function (theme) {
         return request('init', { theme: theme });
       },
-      /** rows for one data source (by its name in the design) */
+      /** new rows: setData(rows) for the report's main data source, or setData(name, rows) for a named one */
       setData: function (name, rows) {
+        if (Array.isArray(name)) {
+          rows = name;
+          name = null;
+        }
         return request('setData', { name: name, rows: rows });
       },
       /** report parameter values; refresh = false to set them without re-rendering */
@@ -151,7 +157,10 @@
     var iframe = document.createElement('iframe');
     iframe.src = url.href;
     iframe.title = opts.title || 'Report';
-    iframe.style.cssText = 'width:100%;height:100%;border:0;display:block;';
+    // right-click > Copy inside the viewer writes to the clipboard
+    iframe.setAttribute('allow', 'clipboard-write');
+    // min-height: a container without a fixed height would otherwise give the iframe the browser's 150px
+    iframe.style.cssText = 'width:100%;height:100%;min-height:480px;border:0;display:block;';
     container.appendChild(iframe);
     var api = connect(
       function () {

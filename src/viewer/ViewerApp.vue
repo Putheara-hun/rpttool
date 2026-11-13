@@ -44,9 +44,10 @@ async function regenerate(reloadData = false) {
 
 setController({
   open,
-  async setData(name: string, rows: Row[]) {
+  async setData(name: string | null, rows: Row[]) {
     requireReport();
-    for (const id of applyData(state.report, { [name]: rows })) invalidateData(id);
+    // no name: the report's main data source
+    for (const id of applyData(state.report, name ? { [name]: rows } : rows)) invalidateData(id);
     await regenerate();
   },
   async setParams(values: Record<string, unknown>, refresh: boolean) {

@@ -4,14 +4,15 @@
 //   host -> viewer                                              viewer -> host
 //   reportviewer:init      { labels?, theme? }                  reportviewer:ready     { version }
 //   reportviewer:load      { content, format?, name?,           reportviewer:loaded    { name, warnings }
-//                            data?: { <source>: rows[] },       reportviewer:rendered  { pages }
+//                            data?: rows[] | { <source>: rows[] }, reportviewer:rendered  { pages }
 //                            params?: { <name>: value } }       reportviewer:refresh   (the user clicked Refresh)
 //   reportviewer:setData   { name, rows }                       reportviewer:error     { message }
 //   reportviewer:setParams { values, refresh? }                 reportviewer:ok        (answer)
 //   reportviewer:refresh   { reloadData? }
 //   reportviewer:print     {}
 //   reportviewer:export    { format: pdf|xlsx|csv|html|png }
-//   labels: the viewer's words by the host viewer's keys (rpt_print, rpt_of, …); theme: 'light' | 'dark'
+//   labels: the viewer's words by the host viewer's keys (rpt_print, rpt_of, …); theme: 'light' | 'dark';
+//   layout: 'page' (one page at a time) | 'scroll' (all pages one after another)
 //
 // Every request may carry a requestId; its answer (loaded / ok / error) repeats it.
 // Only the page that opened the viewer is answered: ?origins=https://erp.example.com (comma list) or, without it,
@@ -19,12 +20,12 @@
 import { reactive } from 'vue';
 import type { Row } from '../model/types';
 import type { OpenOptions } from './load';
-import { setLabels, setTheme } from './labels';
+import { hostLayout, setLabels, setTheme } from './labels';
 
 export type ExportFormat = 'pdf' | 'xlsx' | 'csv' | 'html' | 'png';
 export interface ViewerController {
   open(text: string, o: OpenOptions): Promise<{ name: string; warnings: string[] }>;
-  setData(name: string, rows: Row[]): Promise<void>;
+  setData(name: string | null, rows: Row[]): Promise<void>;
   setParams(values: Record<string, unknown>, refresh: boolean): Promise<void>;
   refresh(reloadData: boolean): Promise<void>;
   print(): Promise<void>;
@@ -86,9 +87,11 @@ async function onMessage(e: MessageEvent) {
   const reply = (t: string, data: Record<string, unknown> = {}) => notifyHost(t, { ...data, requestId });
   if (!ctl) return reply('error', { message: 'The viewer is still starting.' });
   try {
-    // words and theme may come with any message (init, load)
+    // words, theme and page layout may come with any message (init, load); the application's layout is a default,
+    // the user's own choice (toolbar) is not overwritten in their browser
     setLabels(m.labels);
     setTheme(m.theme);
+    hostLayout(m.layout);
     switch (m.type.slice('reportviewer:'.length)) {
       case 'init':
         reply('ok');
@@ -100,8 +103,8 @@ async function onMessage(e: MessageEvent) {
         break;
       }
       case 'setData':
-        if (!m.name || !Array.isArray(m.rows)) throw new Error('setData needs a data source name and a list of rows.');
-        await ctl.setData(String(m.name), m.rows);
+        if (!Array.isArray(m.rows)) throw new Error('setData needs a list of rows.');
+        await ctl.setData(m.name ? String(m.name) : null, m.rows);
         reply('ok', { rows: m.rows.length });
         break;
       case 'setParams':
