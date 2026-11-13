@@ -24,13 +24,16 @@ import {
   TableCellsMerge,
   TableCellsSplit,
   Trash2,
+  ArrowLeft,
+  ArrowRight,
+  Table2,
 } from 'lucide-vue-next';
 import ElementView from './ElementView.vue';
 import FieldPicker from './FieldPicker.vue';
 import { specialFields } from './specialFields';
 import { bandCaption, contentWidth, type ToolId } from '../model/defaults';
-import { cellOwners, cellRectOf, ownerOf, rangeOf } from '../model/table';
-import type { Band, ReportElement, SummaryFunc, TableElement } from '../model/types';
+import { cellOwners, cellRectOf, columnMoveOrder, ownerOf, rangeOf } from '../model/table';
+import type { Band, CrosstabElement, ReportElement, SummaryFunc, TableElement } from '../model/types';
 import {
   addBand,
   addDetailReport,
@@ -91,6 +94,12 @@ import {
   tableOp,
   visibleBands,
   zOrder,
+  linkedTables,
+  moveTableColumn,
+  setCrosstabField,
+  CROSSTAB_LABEL,
+  CROSSTAB_PROP,
+  type CrosstabZone,
   type FieldChoice,
 } from '../store/designer';
 import { applyLineStyle, openContextMenu, type MenuItem } from './ui';
@@ -199,7 +208,9 @@ type Drag =
   | { kind: 'marquee'; start: Pt; cur: Pt; additive: boolean; bandId: string }
   | { kind: 'band'; bandId: string; startY: number; startH: number; minH: number }
   | { kind: 'cells'; id: string }
-  | { kind: 'tableBorder'; id: string; axis: 'col' | 'row'; index: number; start: Pt; orig: number[]; base: number; snapTo: number[]; neighbor: boolean; key: string };
+  | { kind: 'tableBorder'; id: string; axis: 'col' | 'row'; index: number; start: Pt; orig: number[]; base: number; snapTo: number[]; neighbor: boolean; key: string }
+  /** a column dragged by its grip above the table; `to` = the gap it goes to (null = stays) */
+  | { kind: 'colMove'; id: string; from: number; start: Pt; x: number; moved: boolean; to: number | null; blocked: boolean };
 const drag = ref<Drag | null>(null);
 /** table column / row border under the mouse (cursor col-resize / row-resize) */
 const borderHover = ref<'col' | 'row' | null>(null);
@@ -265,6 +276,17 @@ function onMouseDown(e: MouseEvent) {
   if (active && active !== document.body && !pageEl.value?.contains(active)) active.blur();
   const t = e.target as HTMLElement;
   const p = toPage(e);
+  // a column grip above the selected table: drag it to move the column, click it to select the column
+  const grip = t.closest<HTMLElement>('[data-col-grip]');
+  if (grip) {
+    const el = findElement(grip.dataset.table ?? '');
+    if (el?.type === 'table' && !el.locked) {
+      drag.value = { kind: 'colMove', id: el.id, from: Number(grip.dataset.colGrip), start: p, x: p.x, moved: false, to: null, blocked: false };
+      startWindowDrag();
+    }
+    e.preventDefault();
+    return;
+  }
   // priority: a control's resize handle, then a table column / row border, then a band's bottom edge
   const hd = t.closest<HTMLElement>('[data-handle]');
   if (hd) {
@@ -339,6 +361,10 @@ function onMouseDown(e: MouseEvent) {
     let selectOnly: string | null = null;
     if (el.type === 'table' && state.selection.length === 1 && state.selection[0] === id) {
       pickCell(el as TableElement, p);
+    } else if (el.type === 'crosstab' && state.selection.length === 1 && state.selection[0] === id) {
+      // a selected cross tab: the click picks its Rows / Columns / Data area (double-click it to choose a field)
+      const zn = crosstabZoneAt(el, p);
+      ctSel.value = zn ? { id, zone: zn.zone } : null;
     } else if (!state.selection.includes(id)) select([id]);
     else if (state.selection.length > 1) selectOnly = id;
     else state.selectedCell = null;
@@ -472,16 +498,47 @@ function cellBox(el: TableElement, row: number, col: number) {
 function pickCell(el: TableElement, p: Pt) {
   state.selectedCell = { id: el.id, ...cellAt(el, p) };
 }
-/** Top-most label or table cell under a point — the target when a field is dropped onto the page. */
-function bindTargetAt(p: Pt) {
+
+// ------------------------------------------------------------------ cross tab (pivot table) areas
+type CtArea = CrosstabZone | 'corner';
+/** the clicked area of the selected cross tab (highlighted like a table cell) */
+const ctSel = ref<{ id: string; zone: CtArea } | null>(null);
+/** Rows / Columns / Data / corner area of a cross tab as drawn in the designer (page coordinates) */
+function crosstabZoneRect(el: CrosstabElement, zone: CtArea) {
+  const a = absRect(el);
+  const left = zone === 'corner' || zone === 'row';
+  const top = zone === 'corner' || zone === 'column';
+  return { x: a.x + (left ? 0 : el.rowHeaderWidth), y: a.y + (top ? 0 : el.rowHeight), w: left ? el.rowHeaderWidth : el.cellWidth * 2, h: el.rowHeight };
+}
+function crosstabZoneAt(el: CrosstabElement, p: Pt): { zone: CtArea; rect: ReturnType<typeof crosstabZoneRect> } | null {
+  const a = absRect(el);
+  const x = p.x - a.x;
+  const y = p.y - a.y;
+  if (x < 0 || y < 0 || y >= el.rowHeight * 2 || x >= el.rowHeaderWidth + el.cellWidth * 2) return null;
+  const zone: CtArea = y < el.rowHeight ? (x < el.rowHeaderWidth ? 'corner' : 'column') : x < el.rowHeaderWidth ? 'row' : 'value';
+  return { zone, rect: crosstabZoneRect(el, zone) };
+}
+const ctRect = computed(() => {
+  const s = ctSel.value;
+  if (!s || state.selection.length !== 1 || state.selection[0] !== s.id) return null;
+  const el = findElement(s.id);
+  return el?.type === 'crosstab' ? crosstabZoneRect(el, s.zone) : null;
+});
+
+/** Top-most label, table cell or cross tab area under a point — the target when a field is dropped onto the page. */
+function bindTargetAt(p: Pt): { el: ReportElement; cell: { row: number; col: number } | null; zone?: CrosstabZone; rect: { x: number; y: number; w: number; h: number } } | null {
   for (let i = state.report.elements.length - 1; i >= 0; i--) {
     const el = state.report.elements[i];
-    if (el.locked || (el.type !== 'text' && el.type !== 'table')) continue;
+    if (el.locked || (el.type !== 'text' && el.type !== 'table' && el.type !== 'crosstab')) continue;
     const a = absRect(el);
     if (p.x < a.x || p.x > a.x + a.w || p.y < a.y || p.y > a.y + a.h) continue;
     if (el.type === 'table') {
       const c = cellAt(el, p);
       return { el, cell: c, rect: cellBox(el, c.row, c.col) };
+    }
+    if (el.type === 'crosstab') {
+      const zn = crosstabZoneAt(el, p);
+      return zn && zn.zone !== 'corner' ? { el, cell: null, zone: zn.zone, rect: zn.rect } : null;
     }
     return { el, cell: null, rect: a };
   }
@@ -510,6 +567,29 @@ function onMove(e: MouseEvent) {
       const g = gridAt(el, p);
       if (g.row !== (sc.row2 ?? sc.row) || g.col !== (sc.col2 ?? sc.col)) state.selectedCell = { ...sc, row2: g.row, col2: g.col };
     }
+    return;
+  }
+  if (d.kind === 'colMove') {
+    if (!d.moved && Math.abs(p.x - d.start.x) * z.value < 4) return;
+    d.moved = true;
+    d.x = p.x;
+    const el = findElement(d.id);
+    if (!el || el.type !== 'table') return;
+    // the gap between columns nearest to the mouse
+    const a = absRect(el);
+    let best = 0;
+    let bd = Infinity;
+    for (let k = 0, gx = a.x; k <= el.columns.length; gx += el.columns[k] ?? 0, k++) {
+      const dd = Math.abs(p.x - gx);
+      if (dd < bd) {
+        bd = dd;
+        best = k;
+      }
+    }
+    const stays = best === d.from || best === d.from + 1;
+    const ok = !stays && !!columnMoveOrder(el, d.from, best);
+    d.to = ok ? best : null;
+    d.blocked = !stays && !ok;
     return;
   }
   if (d.kind === 'tableBorder') {
@@ -625,6 +705,18 @@ function onUp(e: MouseEvent) {
     endLive();
     return;
   }
+  if (d.kind === 'colMove') {
+    const el = findElement(d.id);
+    if (!el || el.type !== 'table') return;
+    if (!d.moved) {
+      // a click on the grip selects the whole column (then: Delete Column, formatting, Merge …)
+      state.selectedCell = { id: el.id, row: 0, col: d.from, row2: el.rows.length - 1, col2: d.from };
+      return;
+    }
+    if (d.to !== null) moveTableColumn(el.id, d.from, d.to);
+    else if (d.blocked) notify('The column cannot go there: a merged cell would be split. Unmerge it first.');
+    return;
+  }
   if (d.kind === 'band') {
     const h = bandPreview.value?.h ?? d.startH;
     bandPreview.value = null;
@@ -724,6 +816,14 @@ function onDrop(e: DragEvent) {
     const choice = JSON.parse(f) as FieldChoice;
     const { expr, name, type, text, format, align, caption } = choice;
     const t = bindTargetAt(p);
+    if (t?.zone) {
+      // a field dropped on the Rows / Columns / Data area of a cross tab
+      select([t.el.id]);
+      ctSel.value = { id: t.el.id, zone: t.zone };
+      if (text !== undefined) return notify('Use a data field here (page numbers and dates of printing cannot be summarized)');
+      setCrosstabField(t.el.id, t.zone, expr, type);
+      return;
+    }
     if (t) {
       bindToField(t.el.id, t.cell, { expr, name, type, text, format, align, caption });
       select([t.el.id]);
@@ -742,7 +842,7 @@ function onDrop(e: DragEvent) {
 }
 
 // ------------------------------------------------------------------ inline editing
-const inlineEdit = ref<{ id: string; cell?: { row: number; col: number }; x: number; y: number; w: number; h: number; value: string; css: Record<string, string> } | null>(null);
+const inlineEdit = ref<{ id: string; cell?: { row: number; col: number }; corner?: boolean; x: number; y: number; w: number; h: number; value: string; css: Record<string, string> } | null>(null);
 const inlineRef = ref<HTMLTextAreaElement>();
 
 const cssOf = (s: ReturnType<typeof resolveStyle>) => ({
@@ -791,7 +891,39 @@ const picker = ref<{
   title: string;
   dataSourceId: string | null;
   masterDataSourceId: string | null;
+  /** a cross tab area instead of a label / cell (fields only, no static text) */
+  zone?: CrosstabZone;
+  allowText: boolean;
 } | null>(null);
+
+/** where the picker opens: below the box (above it when there is no room below) */
+function pickerPlace(r: { x: number; y: number; w: number; h: number }) {
+  const pr = pageEl.value!.getBoundingClientRect();
+  const w = Math.max(260, Math.min(360, r.w * z.value));
+  const H = 350;
+  let left = pr.left + r.x * z.value;
+  let top = pr.top + (r.y + r.h) * z.value + 3;
+  if (top + H > window.innerHeight - 8) top = Math.max(8, pr.top + r.y * z.value - H - 3);
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  return { x: left, y: top, w };
+}
+
+/** Choose the field of a cross tab's Rows / Columns / Data area */
+function openCrosstabPicker(el: CrosstabElement, zone: CrosstabZone) {
+  select([el.id]);
+  ctSel.value = { id: el.id, zone };
+  picker.value = {
+    id: el.id,
+    cell: null,
+    ...pickerPlace(crosstabZoneRect(el, zone)),
+    current: el[CROSSTAB_PROP[zone]] ?? '',
+    title: `${el.name} · ${CROSSTAB_LABEL[zone]}`,
+    dataSourceId: dataSourceOfBand(el.bandId),
+    masterDataSourceId: masterDataSourceOfBand(el.bandId),
+    zone,
+    allowText: false,
+  };
+}
 
 function openPicker(el: ReportElement, cell: { row: number; col: number } | null) {
   if (el.type !== 'text' && el.type !== 'table') return;
@@ -814,11 +946,16 @@ function openPicker(el: ReportElement, cell: { row: number; col: number } | null
     title: cell ? `${el.name} · row ${cell.row + 1}, column ${cell.col + 1}` : el.name,
     dataSourceId: dataSourceOfBand(el.bandId),
     masterDataSourceId: masterDataSourceOfBand(el.bandId),
+    allowText: true,
   };
 }
 function onPick(f: FieldChoice) {
   const p = picker.value!;
   picker.value = null;
+  if (p.zone) {
+    if (f.text !== undefined) return notify('Use a data field here (page numbers and dates of printing cannot be summarized)');
+    return setCrosstabField(p.id, p.zone, f.expr, f.type);
+  }
   bindToField(p.id, p.cell, f);
 }
 function onPickerText() {
@@ -830,9 +967,10 @@ function onPickerText() {
 async function onPickerExpression() {
   const p = picker.value!;
   picker.value = null;
-  const v = await editExpression(p.current, 'Expression');
+  const v = await editExpression(p.current, p.zone ? `${CROSSTAB_LABEL[p.zone]} — ${findElement(p.id)?.name ?? ''}` : 'Expression');
   if (v === null) return;
-  if (p.cell)
+  if (p.zone) setCrosstabField(p.id, p.zone, v.trim());
+  else if (p.cell)
     mutate((r) => {
       const t = r.elements.find((x) => x.id === p.id) as TableElement | undefined;
       if (t) t.rows[p.cell!.row].cells[p.cell!.col].expression = v;
@@ -842,7 +980,8 @@ async function onPickerExpression() {
 function onPickerClear() {
   const p = picker.value!;
   picker.value = null;
-  clearBinding(p.id, p.cell);
+  if (p.zone) setCrosstabField(p.id, p.zone, '');
+  else clearBinding(p.id, p.cell);
 }
 
 async function onDblClick(e: MouseEvent) {
@@ -868,6 +1007,13 @@ async function onDblClick(e: MouseEvent) {
     // cells with static text (headers): edit the text; empty or field-bound cells: choose a field
     if (!cell.expression && cell.text.trim()) void startInline(el, { row: c.row, col: c.col });
     else openPicker(el, { row: c.row, col: c.col });
+    return;
+  } else if (el.type === 'crosstab') {
+    // Rows / Columns / Data: choose a field; the corner: type its caption; elsewhere: the properties
+    const zn = crosstabZoneAt(el, toPage(e));
+    if (zn?.zone === 'corner') void editCrosstabCorner(el);
+    else if (zn) openCrosstabPicker(el, zn.zone);
+    else state.rightTab = 'properties';
     return;
   } else if (el.type === 'barcode' || el.type === 'checkbox') {
     inlineEdit.value = { id: el.id, x: a.x, y: a.y, w: Math.max(a.w, 100), h: 26, value: el.text, css: {} };
@@ -897,7 +1043,18 @@ function commitInline() {
   if (!ie) return;
   inlineEdit.value = null;
   const value = inlineRef.value?.value ?? ie.value;
-  setStaticText(ie.id, ie.cell ?? null, value);
+  if (ie.corner) setElementProp('corner', value, [ie.id]);
+  else setStaticText(ie.id, ie.cell ?? null, value);
+}
+
+/** the caption in the top-left corner of a cross tab, typed in place */
+async function editCrosstabCorner(el: CrosstabElement) {
+  const r = crosstabZoneRect(el, 'corner');
+  ctSel.value = { id: el.id, zone: 'corner' };
+  inlineEdit.value = { id: el.id, corner: true, x: r.x, y: r.y, w: Math.max(r.w, 60), h: Math.max(r.h, 24), value: el.corner, css: cssOf(resolveStyle(state.report, el.styleName, el.style, { bold: true })) };
+  await nextTick();
+  inlineRef.value?.focus();
+  inlineRef.value?.select();
 }
 /** Typed text replaces any field binding of a label / table cell, so what you type is what prints. */
 function setStaticText(id: string, cell: { row: number; col: number } | null, value: string) {
@@ -935,6 +1092,10 @@ function onEditKey(e: KeyboardEvent) {
   if (el.type === 'table' && state.selectedCell?.id === el.id) {
     e.preventDefault();
     void startInline(el, { row: state.selectedCell.row, col: state.selectedCell.col });
+  } else if (el.type === 'crosstab' && ctSel.value?.id === el.id) {
+    e.preventDefault();
+    if (ctSel.value.zone === 'corner') void editCrosstabCorner(el);
+    else openCrosstabPicker(el, ctSel.value.zone);
   } else if (el.type === 'text') {
     e.preventDefault();
     void startInline(el, null);
@@ -948,7 +1109,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEditKey));
 const pointer = { inside: false, bandId: '', x: 0, y: 0 };
 function onPointerMove(e: MouseEvent) {
   const p = toPage(e);
-  const onHandle = !!(e.target as HTMLElement)?.closest?.('[data-handle]');
+  const onHandle = !!(e.target as HTMLElement)?.closest?.('[data-handle], [data-col-grip]');
   const hb = drag.value ? (drag.value.kind === 'tableBorder' ? drag.value.axis : null) : !state.tool && !e.altKey && !onHandle ? (tableBorderAt(p)?.axis ?? null) : null;
   if (hb !== borderHover.value) borderHover.value = hb;
   const bx = bandAt(p.y);
@@ -1068,10 +1229,15 @@ function onContextMenu(e: MouseEvent) {
         { label: 'Merge with Cell Below', icon: TableCellsMerge, action: () => mergeCellWith('down') },
       );
       if (canUnmergeCells()) items.push({ label: 'Unmerge Cells', icon: TableCellsSplit, action: unmergeCells });
+      const tb = el as TableElement;
+      const col = state.selectedCell!.col;
       items.push({
         label: 'Rows & Columns',
         icon: Rows3,
         children: [
+          { label: 'Move Column Left', icon: ArrowLeft, disabled: !columnMoveOrder(tb, col, col - 1), action: () => moveTableColumn(tb.id, col, col - 1) },
+          { label: 'Move Column Right', icon: ArrowRight, disabled: !columnMoveOrder(tb, col, col + 2), action: () => moveTableColumn(tb.id, col, col + 2) },
+          { sep: true },
           { label: 'Insert Row Above', action: () => tableOp('insertRowAbove') },
           { label: 'Insert Row Below', action: () => tableOp('insertRowBelow') },
           { label: 'Insert Column Left', action: () => tableOp('insertColLeft') },
@@ -1099,6 +1265,38 @@ function onContextMenu(e: MouseEvent) {
           { label: 'Fit to Page Width', action: () => fitTableToPageWidth(el.id) },
         ],
       });
+    }
+    if (el.type === 'crosstab') {
+      const zn = crosstabZoneAt(el, p);
+      if (zn) ctSel.value = { id: el.id, zone: zn.zone };
+      const field = (zone: CrosstabZone) => {
+        const cur = el[CROSSTAB_PROP[zone]];
+        return { label: `${CROSSTAB_LABEL[zone]} Field…${cur ? '  ' + cur : ''}`, icon: Database, action: () => openCrosstabPicker(el, zone) };
+      };
+      const fns: [SummaryFunc, string][] = [
+        ['sum', 'Sum'],
+        ['count', 'Count'],
+        ['avg', 'Average'],
+        ['min', 'Minimum'],
+        ['max', 'Maximum'],
+        ['countDistinct', 'Distinct Count'],
+      ];
+      items.push(
+        field('row'),
+        field('column'),
+        field('value'),
+        { label: 'Summary of the Data', icon: Sigma, children: fns.map(([fn, label]) => ({ label, checked: el.aggregate === fn, action: () => setElementProp('aggregate', fn, [el.id]) })) },
+        {
+          label: 'Totals',
+          icon: Table2,
+          children: [
+            { label: 'Row Totals (right column)', checked: el.showRowTotals, action: () => setElementProp('showRowTotals', !el.showRowTotals, [el.id]) },
+            { label: 'Grand Total Row (bottom)', checked: el.showColumnTotals, action: () => setElementProp('showColumnTotals', !el.showColumnTotals, [el.id]) },
+          ],
+        },
+        { label: 'Corner Text…', icon: Pencil, action: () => void editCrosstabCorner(el) },
+        { sep: true },
+      );
     }
     if (el.type === 'text' || (el.type === 'table' && state.selectedCell)) {
       const cellPos = el.type === 'table' && state.selectedCell ? { row: state.selectedCell.row, col: state.selectedCell.col } : null;
@@ -1299,6 +1497,42 @@ const cellRect = computed(() => {
   };
 });
 
+/** grips above the selected table, one per column: drag one sideways to move that column, click it to select it */
+const GRIP = 14;
+const colGrips = computed(() => {
+  const d = drag.value;
+  if (state.selection.length !== 1 || state.tool || inlineEdit.value || (d && d.kind !== 'colMove')) return [];
+  const el = findElement(state.selection[0]);
+  if (!el || el.type !== 'table' || el.locked || el.columns.length < 2) return [];
+  const a = absRect(el);
+  const h = GRIP / z.value;
+  let x = a.x;
+  return el.columns.map((w, col) => {
+    const g = { table: el.id, col, x, y: a.y - h - 1 / z.value, w, h, active: d?.kind === 'colMove' && d.from === col };
+    x += w;
+    return g;
+  });
+});
+/** while a column is dragged: the column following the mouse and the line where it will go (in every lined-up table) */
+const colMoveMarks = computed(() => {
+  const d = drag.value;
+  if (!d || d.kind !== 'colMove' || !d.moved) return null;
+  const el = findElement(d.id);
+  if (!el || el.type !== 'table') return null;
+  const a = absRect(el);
+  const left = a.x + el.columns.slice(0, d.from).reduce((s, v) => s + v, 0);
+  const ghost = { x: left + (d.x - d.start.x), y: a.y, w: el.columns[d.from], h: a.h };
+  const lines =
+    d.to === null
+      ? []
+      : [el, ...linkedTables(el)].map((t) => {
+          const r = absRect(t);
+          const gx = r.x + t.columns.slice(0, d.to!).reduce((s, v) => s + v, 0);
+          return { x: gx - 1.5 / z.value, y: r.y - 3 / z.value, w: 3 / z.value, h: r.h + 6 / z.value };
+        });
+  return { ghost, lines, blocked: d.blocked };
+});
+
 function onWheel(e: WheelEvent) {
   if (!e.ctrlKey) return;
   picker.value = null;
@@ -1346,7 +1580,13 @@ const selExtent = computed(() => {
   <div
     ref="scroller"
     class="surface-scroller"
-    :class="{ 'tool-cursor': !!state.tool, 'brush-cursor': !!state.formatBrush, 'col-resize-cursor': borderHover === 'col', 'row-resize-cursor': borderHover === 'row' }"
+    :class="{
+      'tool-cursor': !!state.tool,
+      'brush-cursor': !!state.formatBrush,
+      'col-resize-cursor': borderHover === 'col',
+      'row-resize-cursor': borderHover === 'row',
+      'col-moving': drag?.kind === 'colMove' && drag.moved,
+    }"
     @wheel="onWheel"
     @scroll="picker = null"
   >
@@ -1421,6 +1661,23 @@ const selExtent = computed(() => {
 
           <div v-for="(g, i) in ghosts" :key="'g' + i" class="ghost" :style="{ left: g.x + 'px', top: g.y + 'px', width: g.w + 'px', height: g.h + 'px' }" />
           <div
+            v-for="g in colGrips"
+            :key="'cg' + g.col"
+            class="col-grip"
+            :class="{ active: g.active }"
+            :data-col-grip="g.col"
+            :data-table="g.table"
+            title="Drag left or right to move this column · click to select the column"
+            :style="{ left: g.x + 1 / z + 'px', top: g.y + 'px', width: Math.max(0, g.w - 2 / z) + 'px', height: g.h + 'px', borderRadius: 3 / z + 'px' }"
+          >
+            <svg :width="14 / z" :height="6 / z" viewBox="0 0 14 6"><circle v-for="k in 6" :key="k" :cx="2 + ((k - 1) % 3) * 5" :cy="k <= 3 ? 1.5 : 4.5" r="1.1" fill="currentColor" /></svg>
+          </div>
+          <template v-if="colMoveMarks">
+            <div class="col-move-ghost" :class="{ blocked: colMoveMarks.blocked }" :style="{ left: colMoveMarks.ghost.x + 'px', top: colMoveMarks.ghost.y + 'px', width: colMoveMarks.ghost.w + 'px', height: colMoveMarks.ghost.h + 'px' }" />
+            <div v-for="(l, i) in colMoveMarks.lines" :key="'cm' + i" class="col-move-line" :style="{ left: l.x + 'px', top: l.y + 'px', width: l.w + 'px', height: l.h + 'px' }" />
+          </template>
+          <div v-if="ctRect && !drag" class="cell-sel" :style="{ left: ctRect.x + 'px', top: ctRect.y + 'px', width: ctRect.w + 'px', height: ctRect.h + 'px' }" />
+          <div
             v-for="h in handles"
             :key="h.key"
             class="handle"
@@ -1459,7 +1716,7 @@ const selExtent = computed(() => {
     </div>
     <FieldPicker
       v-if="picker"
-      :key="picker.id + (picker.cell ? picker.cell.row + '_' + picker.cell.col : '')"
+      :key="picker.id + (picker.cell ? picker.cell.row + '_' + picker.cell.col : '') + (picker.zone ?? '')"
       :x="picker.x"
       :y="picker.y"
       :width="picker.w"
@@ -1467,7 +1724,7 @@ const selExtent = computed(() => {
       :title="picker.title"
       :data-source-id="picker.dataSourceId"
       :master-data-source-id="picker.masterDataSourceId"
-      :allow-text="true"
+      :allow-text="picker.allowText"
       @choose="onPick"
       @set-text="onPickerSetText"
       @edit-text="onPickerText"

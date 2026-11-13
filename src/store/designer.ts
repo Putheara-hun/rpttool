@@ -25,8 +25,10 @@ import { inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSou
 import { DbError, listConnections, resolveSqlParams, setAuthHandler, type DbConnection } from '../data/dbApi';
 import { compileCalcFields, paramValues, renderReport } from '../engine/renderer';
 import {
+  applyColumnOrder,
   cellOwners,
   cellsIn,
+  columnMoveOrder,
   emptyCell,
   deleteCol,
   deleteRow,
@@ -858,6 +860,28 @@ export function bindToField(elementId: string, cell: { row: number; col: number 
     } else if (el.type === 'text') apply(el as any);
   });
 }
+/** the three areas of a cross tab (pivot table) that take a field */
+export type CrosstabZone = 'row' | 'column' | 'value';
+export const CROSSTAB_PROP: Record<CrosstabZone, 'rowField' | 'columnField' | 'valueField'> = { row: 'rowField', column: 'columnField', value: 'valueField' };
+export const CROSSTAB_LABEL: Record<CrosstabZone, string> = { row: 'Rows', column: 'Columns', value: 'Data' };
+
+/**
+ * Put a field (or an expression; '' = remove) into the Rows, Columns or Data area of a cross tab.
+ * A field that is not a number in Data is counted (summing text makes no sense); a number goes back to Sum.
+ */
+export function setCrosstabField(elementId: string, zone: CrosstabZone, expr: string, type?: string) {
+  mutate((r) => {
+    const el = r.elements.find((e) => e.id === elementId);
+    if (!el || el.type !== 'crosstab') return;
+    el[CROSSTAB_PROP[zone]] = expr;
+    if (zone === 'value' && expr && type) {
+      const text = type === 'string' || type === 'date' || type === 'boolean';
+      if (text && el.aggregate !== 'count' && el.aggregate !== 'countDistinct') el.aggregate = 'count';
+      else if (type === 'number' && (el.aggregate === 'count' || el.aggregate === 'countDistinct')) el.aggregate = 'sum';
+    }
+  });
+}
+
 export function clearBinding(elementId: string, cell: { row: number; col: number } | null) {
   mutate((r) => {
     const el = r.elements.find((e) => e.id === elementId);
@@ -1450,6 +1474,61 @@ export function fitTableToPageWidth(tableId?: string) {
     );
     el.width = el.columns.reduce((a, b) => a + b, 0);
   });
+}
+
+// ------------------------------------------------------------------ moving a column
+/**
+ * Tables lined up with this one: same left edge and the same column widths (± 2px) — e.g. the header row in the
+ * Page Header, the data row in Detail and the total row in a footer. Moving a column moves it in all of them.
+ */
+export function linkedTables(t: TableElement, els: ReportElement[] = state.report.elements): TableElement[] {
+  return els.filter(
+    (o): o is TableElement =>
+      o.type === 'table' && o.id !== t.id && !o.locked && Math.abs(o.x - t.x) <= 2 && o.columns.length === t.columns.length && o.columns.every((w, i) => Math.abs(w - t.columns[i]) <= 2),
+  );
+}
+
+/** Can column `from` go to the gap `to` (0 = before the first column … C = after the last)? */
+export function canMoveColumn(tableId: string, from: number, to: number): boolean {
+  const t = findElement(tableId);
+  return !!t && t.type === 'table' && !t.locked && !!columnMoveOrder(t, from, to);
+}
+
+/**
+ * Move a table column to another place (drag its grip above the table, or Move Column Left / Right).
+ * Tables lined up with it (header / data / total rows in other bands) get the same move, so they stay in step.
+ */
+export function moveTableColumn(tableId: string, from: number, to: number) {
+  const t = findElement(tableId);
+  if (!t || t.type !== 'table' || t.locked) return;
+  const order = columnMoveOrder(t, from, to);
+  if (!order) {
+    if (to !== from && to !== from + 1) notify('This column cannot go there: a merged cell would be split. Unmerge it first.');
+    return;
+  }
+  const linked = linkedTables(t);
+  const moved: string[] = [];
+  const skipped: string[] = [];
+  mutate((r) => {
+    const main = r.elements.find((e) => e.id === t.id) as TableElement;
+    applyColumnOrder(main, order);
+    for (const l of linked) {
+      const o = r.elements.find((e) => e.id === l.id) as TableElement | undefined;
+      if (!o) continue;
+      const ord = columnMoveOrder(o, from, to);
+      if (ord) {
+        applyColumnOrder(o, ord);
+        moved.push(o.name);
+      } else skipped.push(o.name);
+    }
+  });
+  const sc = state.selectedCell;
+  const newCol = order.indexOf(from);
+  state.selectedCell = sc?.id === t.id ? { id: t.id, row: sc.row, col: newCol } : { id: t.id, row: 0, col: newCol };
+  let msg = 'Column moved';
+  if (moved.length) msg += ` — also in ${moved.join(', ')}`;
+  if (skipped.length) msg += `. Not changed (a merged cell is in the way): ${skipped.join(', ')}`;
+  notify(msg, skipped.length ? 'info' : 'success');
 }
 
 // ------------------------------------------------------------------ table commands

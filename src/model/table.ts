@@ -269,6 +269,58 @@ export function insertCol(t: TableElement, at: number, w: number) {
   normalizeSpans(t);
 }
 
+/**
+ * New column order when column `from` is moved to the gap `to` (0 = before the first column, C = after the last):
+ * order[newIndex] = oldIndex. null when nothing changes or a merged cell would be torn apart
+ * (moving a column inside a merged area is fine — the area keeps its cells).
+ */
+export function columnMoveOrder(t: TableElement, from: number, to: number): number[] | null {
+  const C = t.columns.length;
+  if (from < 0 || from >= C || to < 0 || to > C || to === from || to === from + 1) return null;
+  const order = Array.from({ length: C }, (_, i) => i);
+  order.splice(from, 1);
+  order.splice(to > from ? to - 1 : to, 0, from);
+  const pos: number[] = [];
+  order.forEach((old, n) => (pos[old] = n));
+  const owners = cellOwners(t);
+  for (let r = 0; r < t.rows.length; r++)
+    for (let c = 0; c < C; c++) {
+      if (owners[r][c].row !== r || owners[r][c].col !== c) continue;
+      const { cs } = effectiveSpan(t, r, c, owners);
+      if (cs < 2) continue;
+      const ps = Array.from({ length: cs }, (_, k) => pos[c + k]);
+      if (Math.max(...ps) - Math.min(...ps) !== cs - 1) return null;
+    }
+  return order;
+}
+
+/** Reorder the columns (order[newIndex] = oldIndex, from columnMoveOrder): widths, cells and merged cells move along. */
+export function applyColumnOrder(t: TableElement, order: number[]) {
+  const pos: number[] = [];
+  order.forEach((old, n) => (pos[old] = n));
+  const owners = cellOwners(t);
+  // merged cells: their content goes to the left end of their (reordered) area
+  const lefts: { row: number; from: number; to: number }[] = [];
+  for (let r = 0; r < t.rows.length; r++)
+    for (let c = 0; c < t.columns.length; c++) {
+      if (owners[r][c].row !== r || owners[r][c].col !== c) continue;
+      const { cs } = effectiveSpan(t, r, c, owners);
+      if (cs < 2) continue;
+      lefts.push({ row: r, from: pos[c], to: Math.min(...Array.from({ length: cs }, (_, k) => pos[c + k])) });
+    }
+  for (const row of t.rows) {
+    const old = row.cells;
+    row.cells = order.map((k) => old[k]);
+  }
+  t.columns = order.map((k) => t.columns[k]);
+  for (const m of lefts) {
+    if (m.from === m.to) continue;
+    const cells = t.rows[m.row].cells;
+    [cells[m.from], cells[m.to]] = [cells[m.to], cells[m.from]];
+  }
+  normalizeSpans(t);
+}
+
 /** Delete a column; a merged cell starting in it moves its content to the next column. */
 export function deleteCol(t: TableElement, at: number) {
   if (t.columns.length <= 1) return;

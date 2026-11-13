@@ -526,10 +526,13 @@ function layoutCrosstab(el: CrosstabElement, env: LayoutEnv, st: ResolvedStyle):
   if (env.design || !el.rowField || !el.columnField) {
     const cw = el.cellWidth;
     put(el.corner, 0, 0, el.rowHeaderWidth, headerSt);
-    put(el.columnField ? designText('', el.columnField) : '[Columns]', el.rowHeaderWidth, 0, cw * 2, headerSt);
+    // empty areas tell the designer what to do (double-click or drop a field there)
+    const hint = (what: string) => (env.design ? `Drop ${what} field here` : `[${what[0].toUpperCase() + what.slice(1)}]`);
+    const hintSt = (s: ResolvedStyle): ResolvedStyle => ({ ...s, bold: false, italic: true, color: '#64748b', textAlign: 'center' });
+    put(el.columnField ? designText('', el.columnField) : hint('column'), el.rowHeaderWidth, 0, cw * 2, el.columnField ? headerSt : hintSt(headerSt));
     if (el.showRowTotals) put('Total', el.rowHeaderWidth + cw * 2, 0, cw, headerSt);
-    put(el.rowField ? designText('', el.rowField) : '[Rows]', 0, rh, el.rowHeaderWidth, rowHeadSt);
-    put(el.valueField ? designText('', el.valueField, el.aggregate) : '[Data]', el.rowHeaderWidth, rh, cw * 2, valSt);
+    put(el.rowField ? designText('', el.rowField) : hint('row'), 0, rh, el.rowHeaderWidth, el.rowField ? rowHeadSt : hintSt(rowHeadSt));
+    put(el.valueField ? designText('', el.valueField, el.aggregate) : hint('data'), el.rowHeaderWidth, rh, cw * 2, el.valueField ? valSt : hintSt(valSt));
     if (el.showRowTotals) put('', el.rowHeaderWidth + cw * 2, rh, cw, totalSt);
     let h = rh * 2;
     if (el.showColumnTotals) {

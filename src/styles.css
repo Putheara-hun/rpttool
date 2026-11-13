@@ -1343,6 +1343,47 @@ textarea {
 .row-resize-cursor .page * {
   cursor: row-resize !important;
 }
+/* column grips above a selected table: drag to move the column, click to select it */
+.col-grip {
+  position: absolute;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dbeafe;
+  color: #2563eb;
+  border: 1px solid #93c5fd;
+  box-sizing: border-box;
+  cursor: grab !important;
+}
+.col-grip:hover,
+.col-grip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.col-moving .page,
+.col-moving .page * {
+  cursor: grabbing !important;
+}
+.col-move-ghost {
+  position: absolute;
+  pointer-events: none;
+  z-index: 18;
+  background: rgba(37, 99, 235, 0.16);
+  border: 1px dashed #2563eb;
+}
+.col-move-ghost.blocked {
+  background: rgba(220, 38, 38, 0.12);
+  border-color: #dc2626;
+}
+.col-move-line {
+  position: absolute;
+  pointer-events: none;
+  z-index: 21;
+  background: #2563eb;
+  box-shadow: 0 0 0 1px #fff;
+}
 .brush-cursor .band-body,
 .brush-cursor .el {
   cursor:

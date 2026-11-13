@@ -55,11 +55,6 @@ watch(totalPages, () => {
 // switching the layout or the zoom keeps the page the user is on
 watch([isScroll, scale], () => goTo(page.value));
 
-/**
- * One page at a time: whether the page was already RESTING at its bottom / top before the current wheel turn.
- * The browser scrolls before the wheel handler runs, so "at the bottom now" would flip the page in the same turn
- * that scrolled down to it — the user would never see the end of the page. Rest = no scrolling for 150 ms.
- */
 let restAtBottom = false;
 let restAtTop = true;
 let restTimer = 0;
