@@ -8,10 +8,14 @@
  *     report: textFromDatabase,                    // XML (RDL), HTML or JSON text copied from the designer
  *     data: { DataSet1: rows },                    // optional: rows per data source name (replace the saved data)
  *     params: { TITLE: 'Loan Outstanding' },       // optional: report parameter values
+ *     labels: { rpt_print: 'Print', … },           // optional: the viewer's words (your translations)
+ *     theme: 'light',                              // optional: 'light' | 'dark'
  *     onRendered: (pages) => {},                   // optional
+ *     onRefresh: () => {},                         // optional: the user clicked Refresh (send fresh rows)
  *     onError: (err) => alert(err.message),        // optional
  *   });
  *   viewer.load(otherText, { data, params });       // show another report
+ *   viewer.load(await (await fetch('/api/report/42')).json());   // or your API's { report, data, params } as is
  *   viewer.setData('DataSet1', rows);              // new rows, re-rendered
  *   viewer.setParams({ BRANCH: 'HQ' });            // new parameter values, re-rendered
  *   viewer.print();  viewer.exportAs('pdf');       // pdf | xlsx | csv | html | png
@@ -71,10 +75,14 @@
         return;
       }
       if (type === 'ready') {
+        // words and theme first, so the report never shows in the wrong language / colours
+        if (opts.labels || opts.theme) post('init', { labels: opts.labels, theme: opts.theme });
         resolveReady(m);
         if (opts.onReady) opts.onReady(m);
       } else if (type === 'rendered') {
         if (opts.onRendered) opts.onRendered(m.pages);
+      } else if (type === 'refresh') {
+        if (opts.onRefresh) opts.onRefresh();
       } else if (type === 'error') {
         if (opts.onError) opts.onError(new Error(m.message));
       }
@@ -83,10 +91,25 @@
 
     var api = {
       ready: ready,
-      /** show a report: its text (XML / HTML / JSON); o = { data, params, name, format } */
+      /**
+       * show a report: its text (XML / HTML / JSON) and o = { data, params, name, format } —
+       * or one object { report, data, params, name, format } (e.g. your API's answer)
+       */
       load: function (report, o) {
+        if (report && typeof report === 'object' && typeof report.report === 'string') {
+          o = report;
+          report = report.report;
+        }
         o = o || {};
         return request('load', { content: report, data: o.data, params: o.params, name: o.name, format: o.format });
+      },
+      /** the viewer's words, e.g. { rpt_print: '…', rpt_of: '…' } */
+      setLabels: function (labels) {
+        return request('init', { labels: labels });
+      },
+      /** 'light' | 'dark' */
+      setTheme: function (theme) {
+        return request('init', { theme: theme });
       },
       /** rows for one data source (by its name in the design) */
       setData: function (name, rows) {

@@ -1,0 +1,188 @@
+/* Report Viewer: the look of the host application's report viewer (same palette, light and dark). */
+:root {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-2: #f5f7fa;
+  --ink: #1b2540;
+  --muted: #5b6680;
+  --faint: #8a93a8;
+  --border: #d9dee7;
+  --border-soft: #e7ebf1;
+  --teal: #2f55a4;
+  --teal-deep: #21407d;
+  --teal-soft: #e6ecf8;
+  --amber-soft: #fbeedb;
+  --red: #e5302a;
+  --red-soft: #fce7e5;
+  --shadow-sm: 0 1px 2px rgba(20, 30, 55, 0.06), 0 1px 3px rgba(20, 30, 55, 0.04);
+  --shadow-lg: 0 14px 40px rgba(20, 30, 55, 0.16);
+  --r: 14px;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #172238;
+  --surface-2: #1e2c46;
+  --ink: #e8edf7;
+  --muted: #9daac4;
+  --faint: #6e7b97;
+  --border: #2c3a57;
+  --border-soft: #243149;
+  --teal: #4e7ad6;
+  --teal-deep: #3c66c2;
+  --teal-soft: #1e2c50;
+  --amber-soft: #382b14;
+  --red: #f0655f;
+  --red-soft: #3a1f1e;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.55);
+}
+body {
+  background: var(--surface);
+}
+.rv-app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: 'Inter', 'Noto Sans Khmer', system-ui, sans-serif;
+}
+.rv-app .vw-warn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  background: var(--amber-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+.rv-app .vw-warn span {
+  flex: 1;
+}
+.rv-app .vw-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* waiting for the application / start screen (opened by hand) */
+.rv-app .vw-wait {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--surface-2);
+}
+.rv-app .vw-start {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow: auto;
+  background: var(--surface-2);
+}
+.rv-app .vw-card {
+  width: 100%;
+  max-width: 720px;
+  padding: 22px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-sm);
+}
+.rv-app .vw-card h1 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+}
+.rv-app .vw-card p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.rv-app .vw-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  height: 220px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  white-space: pre;
+  resize: vertical;
+  outline: none;
+}
+.rv-app .vw-card textarea:focus {
+  border-color: var(--teal);
+}
+.rv-app .vw-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.rv-app .vw-grow {
+  flex: 1;
+}
+.rv-app .vw-err {
+  margin-top: 8px;
+  color: var(--red);
+  font-size: 12.5px;
+}
+.rv-app .vw-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+.rv-app .vw-btn:hover:not(:disabled) {
+  background: var(--teal-soft);
+  color: var(--teal-deep);
+}
+.rv-app .vw-btn.primary {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+.rv-app .vw-btn.primary:hover:not(:disabled) {
+  background: var(--teal-deep);
+  color: #fff;
+}
+.rv-app .vw-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.rv-app .vw-btn.small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.rv-app .rv-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: vw-spin 0.8s linear infinite;
+}
+@keyframes vw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

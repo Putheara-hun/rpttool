@@ -2,14 +2,16 @@
 // The viewer runs in an iframe of the host page, or in a tab the host opened (window.open); see public/viewer.js.
 //
 //   host -> viewer                                              viewer -> host
-//   reportviewer:load      { content, format?, name?,           reportviewer:ready     { version }
-//                            data?: { <source>: rows[] },       reportviewer:loaded    { name, warnings }
-//                            params?: { <name>: value } }       reportviewer:rendered  { pages }
+//   reportviewer:init      { labels?, theme? }                  reportviewer:ready     { version }
+//   reportviewer:load      { content, format?, name?,           reportviewer:loaded    { name, warnings }
+//                            data?: { <source>: rows[] },       reportviewer:rendered  { pages }
+//                            params?: { <name>: value } }       reportviewer:refresh   (the user clicked Refresh)
 //   reportviewer:setData   { name, rows }                       reportviewer:error     { message }
 //   reportviewer:setParams { values, refresh? }                 reportviewer:ok        (answer)
 //   reportviewer:refresh   { reloadData? }
 //   reportviewer:print     {}
 //   reportviewer:export    { format: pdf|xlsx|csv|html|png }
+//   labels: the viewer's words by the host viewer's keys (rpt_print, rpt_of, …); theme: 'light' | 'dark'
 //
 // Every request may carry a requestId; its answer (loaded / ok / error) repeats it.
 // Only the page that opened the viewer is answered: ?origins=https://erp.example.com (comma list) or, without it,
@@ -17,6 +19,7 @@
 import { reactive } from 'vue';
 import type { Row } from '../model/types';
 import type { OpenOptions } from './load';
+import { setLabels, setTheme } from './labels';
 
 export type ExportFormat = 'pdf' | 'xlsx' | 'csv' | 'html' | 'png';
 export interface ViewerController {
@@ -83,7 +86,13 @@ async function onMessage(e: MessageEvent) {
   const reply = (t: string, data: Record<string, unknown> = {}) => notifyHost(t, { ...data, requestId });
   if (!ctl) return reply('error', { message: 'The viewer is still starting.' });
   try {
+    // words and theme may come with any message (init, load)
+    setLabels(m.labels);
+    setTheme(m.theme);
     switch (m.type.slice('reportviewer:'.length)) {
+      case 'init':
+        reply('ok');
+        break;
       case 'load': {
         const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
         const r = await ctl.open(content, { name: m.name, format: m.format, data: m.data, params: m.params });

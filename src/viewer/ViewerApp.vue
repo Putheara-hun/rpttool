@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue';
-import { FileText, FolderOpen, X } from 'lucide-vue-next';
-import PreviewPanel from '../preview/PreviewPanel.vue';
+import SheetViewer from './SheetViewer.vue';
 import LoginDialog from '../dialogs/LoginDialog.vue';
 import SiteLoginDialog from '../dialogs/SiteLoginDialog.vue';
 import type { Row } from '../model/types';
 import { invalidateData, loadReport, state } from '../store/designer';
 import { applyData, declareParams, paramValuesFor, prepareReport, type OpenOptions } from './load';
 import { initViewerHost, notifyHost, setController, viewerHost, type ExportFormat } from './host';
+import { labels as L } from './labels';
 
 /**
- * Report Viewer: shows a report from its text (HTML / XML-RDL / JSON copied from the designer, or an RDL file)
- * with the designer's preview — pages, zoom, find, parameters, print and export — and nothing to edit.
+ * Report Viewer: shows a report from its text (HTML / XML-RDL / JSON copied from the designer, or an RDL file).
+ * Made to sit in an iframe of another application, which runs its query and sends the text + rows (viewer.js);
+ * opened by hand it offers a paste box.
  */
-const preview = ref<InstanceType<typeof PreviewPanel>>();
+const viewer = ref<InstanceType<typeof SheetViewer>>();
 const loaded = ref(false);
 const viewKey = ref(0);
 const importWarnings = ref<string[]>([]);
@@ -29,7 +30,7 @@ async function open(text: string, o: OpenOptions = {}) {
   state.paramValues = paramValuesFor(def, o.params);
   importWarnings.value = warnings;
   loaded.value = true;
-  viewKey.value++; // a fresh preview renders the new report
+  viewKey.value++; // a fresh viewer renders the new report
   await nextTick();
   return { name: def.name, warnings };
 }
@@ -38,7 +39,7 @@ function requireReport() {
 }
 async function regenerate(reloadData = false) {
   await nextTick();
-  await preview.value?.generate(reloadData);
+  await viewer.value?.generate(reloadData);
 }
 
 setController({
@@ -60,15 +61,15 @@ setController({
   },
   async print() {
     requireReport();
-    await preview.value?.print();
+    await viewer.value?.print();
   },
   async exportAs(format: ExportFormat) {
     requireReport();
-    await preview.value?.exportAs(format);
+    await viewer.value?.exportAs(format);
   },
 });
 
-// ---- standalone use: paste the text or open a file
+// ---- opened by hand: paste the text or open a file
 async function openPasted() {
   if (!pasted.value.trim()) return;
   opening.value = true;
@@ -113,42 +114,39 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app viewer-app">
-    <div class="titlebar">
-      <div class="logo"><FileText :size="18" /> Report Viewer</div>
-      <div class="doc-title">{{ loaded ? state.report.name || 'Report' : '' }}</div>
-      <button v-if="loaded && !viewerHost.active" class="btn small viewer-open" @click="openAnother"><FolderOpen :size="14" /> Open another report</button>
-    </div>
-
-    <div v-for="(w, i) in importWarnings" :key="i" class="warn-bar viewer-warn">
+  <div class="rv-app">
+    <div v-for="(w, i) in importWarnings" :key="i" class="vw-warn">
       <span>{{ w }}</span>
-      <button class="icon-btn" title="Hide" @click="importWarnings.splice(i, 1)"><X :size="13" /></button>
+      <button class="vw-x" title="Hide" @click="importWarnings.splice(i, 1)">✕</button>
     </div>
 
-    <div class="main">
-      <section class="center">
-        <PreviewPanel
-          v-if="loaded"
-          ref="preview"
-          :key="viewKey"
-          @rendered="(pages) => notifyHost('rendered', { pages })"
-          @failed="(message) => notifyHost('error', { message })"
-        />
-        <div v-else-if="viewerHost.active" class="vw-wait"><div class="spinner" /> Waiting for the report…</div>
-        <div v-else class="vw-start" @dragover.prevent @drop.prevent="openFile(($event as DragEvent).dataTransfer?.files?.[0])">
-          <div class="vw-card">
-            <h1><FileText :size="22" /> Report Viewer</h1>
-            <p>Paste the text of a report — XML (RDL), HTML or JSON, as copied with <b>Copy Text</b> in the designer — or open a report file. You can also drop a file here.</p>
-            <textarea v-model="pasted" spellcheck="false" placeholder="Paste the report text here (Ctrl+V)" @input="openError = ''" />
-            <div v-if="openError" class="err">{{ openError }}</div>
-            <div class="row" style="margin-top: 10px">
-              <button class="btn" :disabled="opening" @click="pickFile"><FolderOpen :size="14" /> Open file…</button>
-              <span class="grow" />
-              <button class="btn primary" :disabled="opening || !pasted.trim()" @click="openPasted">{{ opening ? 'Opening…' : 'Show report' }}</button>
-            </div>
-          </div>
+    <SheetViewer
+      v-if="loaded"
+      ref="viewer"
+      :key="viewKey"
+      @rendered="(pages) => notifyHost('rendered', { pages })"
+      @failed="(message) => notifyHost('error', { message })"
+      @refresh="notifyHost('refresh')"
+    >
+      <template v-if="!viewerHost.active" #actions>
+        <button class="vw-btn small" @click="openAnother">Open another report</button>
+      </template>
+    </SheetViewer>
+
+    <div v-else-if="viewerHost.active" class="vw-wait"><span class="rv-spin" /> {{ L.rpt_waiting }}</div>
+
+    <div v-else class="vw-start" @dragover.prevent @drop.prevent="openFile(($event as DragEvent).dataTransfer?.files?.[0])">
+      <div class="vw-card">
+        <h1>Report Viewer</h1>
+        <p>Paste the text of a report — XML (RDL), HTML or JSON, as copied with <b>Copy Text</b> in the designer — or open a report file. You can also drop a file here.</p>
+        <textarea v-model="pasted" spellcheck="false" placeholder="Paste the report text here (Ctrl+V)" @input="openError = ''" />
+        <div v-if="openError" class="vw-err">{{ openError }}</div>
+        <div class="vw-row">
+          <button class="vw-btn" :disabled="opening" @click="pickFile">Open file…</button>
+          <span class="vw-grow" />
+          <button class="vw-btn primary" :disabled="opening || !pasted.trim()" @click="openPasted">{{ opening ? 'Opening…' : 'Show report' }}</button>
         </div>
-      </section>
+      </div>
     </div>
 
     <LoginDialog v-if="state.loginRequests.length" :key="state.loginRequests[0].connectionId" />

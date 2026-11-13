@@ -26,8 +26,11 @@ The simplest way to keep reports in another system: no integration needed.
 ## Report Viewer (text → report)
 
 `/viewer` (or `/viewer.html`) shows a report from its **text** — the XML (RDL), HTML or JSON copied with
-**Copy Text**, or an RDL file from Report Builder — with pages, zoom, find, parameters, refresh, print and export
-(PDF, Excel, CSV, HTML, PNG). Nothing can be edited there.
+**Copy Text**, or an RDL file from Report Builder — in the look of an application's report viewer: one sheet at a
+time, page navigation, zoom box + slider, find, export (Excel, PDF, HTML, CSV, PNG), print, refresh, record count.
+No parameters panel and nothing to edit: the application chooses the criteria, runs its query and sends the rows.
+Options `theme: 'light' | 'dark'` and `labels: { rpt_print: '…', … }` (its own words); `onRefresh` tells it the
+user clicked Refresh. The stand-alone copy of the viewer lives in the `report-viewer` project (`npm run sync` there).
 
 - **By hand:** open `/viewer`, paste the text (or open / drop a file) → **Show report**.
 - **From your system** (`viewer.js`, next to the viewer):
