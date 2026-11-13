@@ -31,8 +31,14 @@ const info = computed(() => PROVIDERS.find((p) => p.id === c.value.provider)!);
 const savesConnections = ref(false);
 /** no ReportTool server on this website: say so before anyone types a server password */
 const noService = ref('');
+/** public website (REPORTTOOL_PUBLIC=1): connections are private to this browser; no SQLite files */
+const publicMode = ref(false);
+const providers = computed(() => PROVIDERS.filter((p) => !(publicMode.value && p.id === 'sqlite')));
 void serverHealth()
-  .then((h) => (savesConnections.value = !!h.savesConnections))
+  .then((h) => {
+    savesConnections.value = !!h.savesConnections;
+    publicMode.value = !!h.public;
+  })
   .catch((e) => {
     if (e instanceof DbError && e.noService) noService.value = e.message;
   });
@@ -134,7 +140,7 @@ async function save() {
     <div class="form-grid" style="grid-template-columns: 150px 1fr">
       <label>Database type</label>
       <select :value="c.provider" @change="setProvider(($event.target as HTMLSelectElement).value as Provider)">
-        <option v-for="p in PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}</option>
+        <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.label }}</option>
       </select>
       <label>Connection name</label>
       <input v-model="c.name" :placeholder="defaultName()" />
@@ -199,6 +205,9 @@ async function save() {
             <span v-if="c.savePassword" class="hint">The password is stored in plain text in <code>.reporttool/connections.json</code> next to the app. Leave this off to be asked once per session.</span>
             <span v-else class="hint">The password is kept in memory only; you will be asked to log in again after the app restarts.</span>
           </template>
+          <span v-else-if="publicMode" class="hint">
+            Only this browser can see and use this connection — other visitors of the website cannot. Nothing is saved to disk: it is kept in the website's memory until the website restarts.
+          </span>
           <span v-else class="hint">Nothing is saved to disk: the connection and its password are kept in memory only, until ReportTool is restarted.</span>
         </div>
       </template>

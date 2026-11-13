@@ -1,6 +1,7 @@
 // HTTP API for database access. Mounted as connect-style middleware (Vite dev server) or by server/index.mjs.
 import { ApiError } from './common.mjs';
-import { AUTH_ENABLED, login, logout, signedIn } from './auth.mjs';
+import { AUTH_ENABLED, login, logout, PUBLIC, signedIn, visitorOf } from './auth.mjs';
+import { assertPublicTarget, countAttempt } from './netguard.mjs';
 import { deleteConnection, getConnection, listConnections, needsPassword, PERSIST, publicConn, saveConnection, setPassword, validate } from './store.mjs';
 
 const DRIVERS = {
@@ -24,8 +25,9 @@ const EXTRA_HOSTS = (process.env.REPORTTOOL_ALLOWED_HOSTS ?? '')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 // With a team password (REPORTTOOL_PASSWORD) the API may be used from any address: sign-in protects it.
+// In public mode (REPORTTOOL_PUBLIC=1) too: every browser only has its own connections.
 const hostAllowed = (host) =>
-  AUTH_ENABLED || !!process.env.REPORTTOOL_ALLOW_REMOTE || LOCAL_HOSTS.test(host) || EXTRA_HOSTS.includes(host.toLowerCase().replace(/:\d+$/, ''));
+  AUTH_ENABLED || PUBLIC || !!process.env.REPORTTOOL_ALLOW_REMOTE || LOCAL_HOSTS.test(host) || EXTRA_HOSTS.includes(host.toLowerCase().replace(/:\d+$/, ''));
 
 function send(res, status, body) {
   const json = JSON.stringify(body);
@@ -58,11 +60,12 @@ function readJson(req) {
   });
 }
 
-/** Resolve a connection by id and make sure we know its password. */
-function connFor(id) {
-  const c = getConnection(id);
+/** Resolve a connection of this browser (public mode) by id and make sure we know its password. */
+async function connFor(id, owner) {
+  const c = getConnection(id, owner);
   if (!c) throw new ApiError(`Database connection "${id}" was not found. Choose or create a connection in the data source settings.`, 404, { missingConnection: true });
   if (needsPassword(c)) throw new ApiError(`Log in to "${c.name}" to continue.`, 401, { needLogin: true, connectionId: c.id, name: c.name, user: c.user });
+  await assertPublicTarget(c);
   return c;
 }
 
@@ -76,18 +79,25 @@ function friendly(e) {
   return msg;
 }
 
-async function route(method, url, body) {
+/** `owner`: the visitor in public mode (each browser has its own connections), otherwise undefined (shared list). */
+async function route(method, url, body, owner, req) {
   const path = url.split('?')[0];
-  if (method === 'GET' && path === '/api/connections') return listConnections();
-  if (method === 'POST' && path === '/api/connections') return saveConnection(body);
+  if (method === 'GET' && path === '/api/connections') return listConnections(owner);
+  if (method === 'POST' && path === '/api/connections') {
+    validate(body);
+    await assertPublicTarget(body);
+    return saveConnection(body, owner);
+  }
   let m = /^\/api\/connections\/([^/]+)$/.exec(path);
-  if (method === 'DELETE' && m) return { ok: deleteConnection(decodeURIComponent(m[1])) };
+  if (method === 'DELETE' && m) return { ok: deleteConnection(decodeURIComponent(m[1]), owner) };
 
   if (method === 'POST' && path === '/api/connections/test') {
     // test an unsaved connection definition (password may be omitted to reuse the stored one)
     const input = body.connection ?? {};
     validate(input);
-    const stored = input.id ? getConnection(input.id) : null;
+    countAttempt(req);
+    await assertPublicTarget(input);
+    const stored = input.id ? getConnection(input.id, owner) : null;
     const c = { ...input, id: input.id || 'test:' + Date.now(), password: typeof input.password === 'string' ? input.password : stored?.password };
     const d = await driver(c.provider);
     try {
@@ -99,23 +109,25 @@ async function route(method, url, body) {
   }
   m = /^\/api\/connections\/([^/]+)\/login$/.exec(path);
   if (method === 'POST' && m) {
-    const c = getConnection(decodeURIComponent(m[1]));
+    const c = getConnection(decodeURIComponent(m[1]), owner);
     if (!c) throw new ApiError('Connection not found', 404);
+    countAttempt(req);
+    await assertPublicTarget(c);
     const d = await driver(c.provider);
     const version = await d.test({ ...c, password: body.password ?? '' });
     setPassword(c.id, body.password ?? '');
-    return { ok: true, version, connection: publicConn(getConnection(c.id)) };
+    return { ok: true, version, connection: publicConn(getConnection(c.id, owner)) };
   }
   if (method === 'POST' && path === '/api/db/schema') {
-    const c = connFor(body.connectionId);
+    const c = await connFor(body.connectionId, owner);
     return (await driver(c.provider)).schema(c);
   }
   if (method === 'POST' && path === '/api/db/params') {
-    const c = connFor(body.connectionId);
+    const c = await connFor(body.connectionId, owner);
     return (await driver(c.provider)).params(c, body.object ?? {});
   }
   if (method === 'POST' && path === '/api/db/execute') {
-    const c = connFor(body.connectionId);
+    const c = await connFor(body.connectionId, owner);
     const src = body.source ?? {};
     if (src.mode === 'query' && !String(src.query ?? '').trim()) throw new ApiError('Enter a SQL query.');
     if (src.mode !== 'query' && !src.name) throw new ApiError('Choose a table, view, procedure or function.');
@@ -140,7 +152,8 @@ export function createApiHandler() {
     //  - custom header required (a cross-site page cannot send it without a CORS preflight, which we never allow)
     if (!hostAllowed(req.headers.host ?? '')) {
       return send(res, 403, {
-        error: 'Database access from the internet is turned off on this server. The server owner can turn it on by setting a team password (REPORTTOOL_PASSWORD).',
+        error:
+          'Database access from the internet is turned off on this server. The server owner can turn it on with REPORTTOOL_PUBLIC=1 (anyone, private connections per browser) or a team password (REPORTTOOL_PASSWORD).',
         noService: true,
       });
     }
@@ -148,8 +161,11 @@ export function createApiHandler() {
     try {
       const path = url.split('?')[0];
       const body = req.method === 'POST' ? await readJson(req) : {};
+      // public mode: this browser's anonymous id (handed out on its first request)
+      const owner = visitorOf(req, res);
       if (req.method === 'GET' && path === '/api/health') {
-        return send(res, 200, { ok: true, providers: Object.keys(DRIVERS), savesConnections: PERSIST, auth: AUTH_ENABLED, signedIn: signedIn(req) });
+        const providers = Object.keys(DRIVERS).filter((p) => !(PUBLIC && p === 'sqlite'));
+        return send(res, 200, { ok: true, providers, savesConnections: PERSIST, auth: AUTH_ENABLED, signedIn: signedIn(req), public: PUBLIC });
       }
       // team password (REPORTTOOL_PASSWORD): sign in / out, everything else needs a signed-in browser
       if (req.method === 'POST' && path === '/api/auth/login') {
@@ -161,7 +177,7 @@ export function createApiHandler() {
         return send(res, r.status, r.body);
       }
       if (!signedIn(req)) return send(res, 401, { error: 'Sign in with the team password to use database connections.', authRequired: true });
-      send(res, 200, await route(req.method, url, body));
+      send(res, 200, await route(req.method, url, body, owner, req));
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 400;
       send(res, status, { error: friendly(e), ...(e instanceof ApiError ? e.extra : {}) });

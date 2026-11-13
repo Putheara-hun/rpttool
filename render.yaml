@@ -1,28 +1,22 @@
-# Render Blueprint - ReportTool designer WITH database connections.
+# Render Blueprint - ReportTool designer WITH database connections (web service running server/index.mjs).
 #
-# Runs ReportTool's server program (server/index.mjs): it serves the designer and connects to databases
-# (SQL Server, Oracle, PostgreSQL, MySQL). Database access is protected by a team password.
+# Who may use the databases - choose ONE in the environment variables:
+#   REPORTTOOL_PUBLIC=1       anyone, free, no sign-in. Every browser has its own PRIVATE connections: other
+#                             visitors cannot see or use them. Only databases on the public internet; no SQLite.
+#   REPORTTOOL_PASSWORD=...   a team: people sign in with this password and share one list of connections
+#                             (optionally pre-filled with REPORTTOOL_CONNECTIONS, see README).
+# With neither, the website refuses database access from the internet.
 #
-# Deploy: in Render choose New > Blueprint, pick this repository. Render asks for:
-#   REPORTTOOL_PASSWORD     the team password people type before they can use databases (use a long one)
-#   REPORTTOOL_CONNECTIONS  optional: connections ready for everybody, with their passwords, as JSON, e.g.
-#     [{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,"database":"SalesDB",
-#       "user":"report_reader","password":"...","trustServerCertificate":true}]
-#     (enter [] if you have none - people can still add connections in the designer)
-# Both stay secret in Render (Environment tab); change them there at any time.
-#
-# Your database server must accept connections from Render (open its firewall for Render's outbound
-# addresses: Render dashboard > the service > Connect > Outbound).
-# Free plan: the service sleeps after 15 minutes without visitors; the first visit then takes about a minute.
-# Connections added in the designer are kept in memory only (gone after a restart / sleep); creating one again
-# with the same details reconnects existing reports. Connections in REPORTTOOL_CONNECTIONS are always there.
+# Your database server must accept connections from Render (Render dashboard > the service > Connect > Outbound).
+# Free plan: the service sleeps after 15 minutes without visitors (first visit then ~1 minute) and connections
+# added in the designer are kept in memory only; adding one again with the same details reconnects saved reports.
 
 services:
   - type: web
     runtime: node
     name: reporttool-server
     plan: free
-    # choose the region closest to your database server: oregon, ohio, virginia, frankfurt or singapore
+    # choose the region closest to your database servers: oregon, ohio, virginia, frankfurt or singapore
     region: singapore
     # --include=dev: the build needs vite / vue-tsc from devDependencies
     buildCommand: npm ci --include=dev && npm run build
@@ -33,7 +27,5 @@ services:
         value: "22"
       - key: HOST
         value: 0.0.0.0
-      - key: REPORTTOOL_PASSWORD
-        sync: false
-      - key: REPORTTOOL_CONNECTIONS
-        sync: false
+      - key: REPORTTOOL_PUBLIC
+        value: "1"

@@ -7,18 +7,39 @@ import crypto from 'node:crypto';
 
 const PASSWORD = process.env.REPORTTOOL_PASSWORD ?? '';
 export const AUTH_ENABLED = PASSWORD.length > 0;
+/**
+ * Public mode (REPORTTOOL_PUBLIC=1, no team password): anyone may use databases on this website, and each browser
+ * gets its own private list of connections (anonymous visitor cookie) that nobody else can see or use.
+ * A team password wins when both are set (team mode: one shared list for the team).
+ */
+export const PUBLIC = !AUTH_ENABLED && /^(1|true|yes)$/i.test(process.env.REPORTTOOL_PUBLIC ?? '');
 const KEY = crypto.createHash('sha256').update('reporttool-session\n' + PASSWORD).digest();
 const COOKIE = 'rt_session';
 const MAX_AGE_S = 7 * 24 * 3600;
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
 const sign = (s) => crypto.createHmac('sha256', KEY).update(s).digest('base64url');
 
-function cookieValue(req) {
+function cookieValue(req, name = COOKIE) {
   for (const part of String(req.headers.cookie ?? '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === COOKIE) return part.slice(i + 1).trim();
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return '';
+}
+
+/**
+ * Public mode: the anonymous id of this browser (owner of its connections); a new one is handed out on the first
+ * request. Undefined in local / team mode (one shared list).
+ */
+const VISITOR = 'rt_visitor';
+export function visitorOf(req, res) {
+  if (!PUBLIC) return undefined;
+  let v = cookieValue(req, VISITOR);
+  if (!/^[A-Za-z0-9_-]{24}$/.test(v)) {
+    v = crypto.randomBytes(18).toString('base64url');
+    res.setHeader('Set-Cookie', `${VISITOR}=${v}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${30 * 24 * 3600}${https(req) ? '; Secure' : ''}`);
+  }
+  return v;
 }
 
 /** is this browser signed in? (always true when no team password is configured) */

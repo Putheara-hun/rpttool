@@ -119,7 +119,8 @@ async function api<T>(method: string, url: string, body?: unknown, retried = fal
   return data as T;
 }
 
-export const serverHealth = () => api<{ ok: boolean; providers: string[]; savesConnections?: boolean; auth?: boolean; signedIn?: boolean }>('GET', './api/health');
+export const serverHealth = () =>
+  api<{ ok: boolean; providers: string[]; savesConnections?: boolean; auth?: boolean; signedIn?: boolean; public?: boolean }>('GET', './api/health');
 export const signIn = (password: string) => api<{ ok: boolean }>('POST', './api/auth/login', { password }, true);
 export const signOut = () => api<{ ok: boolean }>('POST', './api/auth/logout', {}, true);
 export const listConnections = () => api<DbConnection[]>('GET', './api/connections');

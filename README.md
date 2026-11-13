@@ -60,22 +60,26 @@ as **text** and the host stores it in its own database. Try `http://localhost:51
 ### Host on Render (with database connections)
 
 `render.yaml` runs ReportTool's server on Render (web service `reporttool-server`): the designer plus database
-connections, protected by a **team password**.
+connections. Render ▸ the service ▸ **Environment**: `HOST=0.0.0.0`, `NODE_VERSION=22`, and **one** of
 
-1. Push the project to GitHub / GitLab, then in Render: **New → Blueprint** → choose the repository. Render asks for
-   - `REPORTTOOL_PASSWORD` — the team password (use a long one). Anyone who opens a database in the designer is asked
-     for it once per browser (7 days). After 10 wrong tries an address is locked for 15 minutes.
-   - `REPORTTOOL_CONNECTIONS` — optional, enter `[]` for none. Connections ready for everybody, with their password,
-     as JSON: `[{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,"database":"SalesDB","user":"report_reader","password":"…","trustServerCertificate":true}]`.
-     They survive restarts and cannot be changed or deleted in the designer.
-2. Your database server must accept connections from Render's outbound addresses (Render: service ▸ Connect ▸ Outbound).
-3. Use a **read-only** database login (e.g. only `db_datareader`): signed-in users can run any SQL with it
+- `REPORTTOOL_PUBLIC=1` — **free for everyone**, no sign-in. Every browser gets its own **private** list of
+  connections (an anonymous cookie): other visitors cannot see, use, change or delete them. Only database servers on
+  the public internet can be reached (no localhost / private networks / SQLite files), at most 20 connections per
+  browser and 30 connection tests per address in 10 minutes.
+- `REPORTTOOL_PASSWORD=…` — **a team**: people sign in once per browser (7 days) and share one list of connections.
+  After 10 wrong passwords an address is locked for 15 minutes. Optional `REPORTTOOL_CONNECTIONS` pre-fills the list
+  with their passwords, as JSON: `[{"name":"Sales","provider":"mssql","host":"db.example.com","port":1433,"database":"SalesDB","user":"report_reader","password":"…","trustServerCertificate":true}]`
+  (they survive restarts and cannot be changed or deleted in the designer; ignored in public mode).
+
+Then:
+1. Your database server must accept connections from Render's outbound addresses (Render: service ▸ Connect ▸ Outbound).
+2. Use a **read-only** database login (e.g. only `db_datareader`): whoever uses a connection can run any SQL with it
    (Custom SQL query).
 
 Notes: free plan = the service sleeps after 15 minutes without visitors (first visit then ~1 minute) and connections
 added in the designer are lost (memory only) — creating one again with the same details reconnects saved reports.
 Change the password or connections later in Render ▸ Environment (changing the password signs everybody out).
-Without `REPORTTOOL_PASSWORD` the server refuses database access from the internet.
+With neither `REPORTTOOL_PUBLIC` nor `REPORTTOOL_PASSWORD` the server refuses database access from the internet.
 
 ## Save as HTML or RDL
 
