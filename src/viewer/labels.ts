@@ -40,6 +40,11 @@ export const DEFAULT_LABELS = {
   rpt_copy_page: 'Copy page {n}',
   rpt_copy_all: 'Copy all pages',
   rpt_copied: 'Copied',
+  rpt_copy_image: 'Copy as image',
+  rpt_page_n: 'page {n}',
+  rpt_copying: 'Copying…',
+  rpt_copied_image: 'Image copied — paste it with Ctrl+V',
+  rpt_image_saved: 'This browser cannot copy images: the picture was downloaded',
 };
 export type LabelKey = keyof typeof DEFAULT_LABELS;
 

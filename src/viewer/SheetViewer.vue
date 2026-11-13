@@ -269,7 +269,7 @@ function onMenu(e: MouseEvent) {
   const line = hit ? linesOf(boxes).find((l) => l.includes(hit)) : undefined;
   menu.value = {
     x: Math.max(4, Math.min(e.clientX, window.innerWidth - 240)),
-    y: Math.max(4, Math.min(e.clientY, window.innerHeight - 220)),
+    y: Math.max(4, Math.min(e.clientY, window.innerHeight - 270)),
     page: pi,
     value: hit?.text ?? '',
     row: line ? lineText(line) : '',
@@ -277,8 +277,42 @@ function onMenu(e: MouseEvent) {
   };
 }
 const short = (s: string) => (s.length > 28 ? s.slice(0, 27) + '…' : s);
-const copied = ref(false);
+/** the note in the toolbar after copying ("Copied", "Image copied …"); empty = hidden */
+const copied = ref('');
 let copiedTimer = 0;
+function note(text: string, ms = 1600) {
+  copied.value = text;
+  clearTimeout(copiedTimer);
+  if (ms) copiedTimer = window.setTimeout(() => (copied.value = ''), ms);
+}
+
+/**
+ * The page as a picture on the clipboard (twice the screen size: sharp when pasted into a chat, Word or an email).
+ * The PNG is handed to the clipboard as a promise, so the copy starts inside the click — browsers allow it only
+ * then. Where images cannot be put on the clipboard, the picture is downloaded instead.
+ */
+async function copyImage(pi: number) {
+  menu.value = null;
+  const p = doc.value?.pages[pi];
+  if (!p) return;
+  note(L.rpt_copying, 0);
+  const ex = import('../export');
+  const png = ex.then((m) => m.pageToPng(p, 2));
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+    note(L.rpt_copied_image, 2600);
+  } catch {
+    try {
+      const m = await ex;
+      m.downloadBlob(await png, `${m.safeFileName(state.report.name)}_page${pi + 1}.png`);
+      note(L.rpt_image_saved, 3500);
+    } catch (e) {
+      note('');
+      error.value = (e as Error).message;
+    }
+  }
+}
+
 async function copy(text: string) {
   menu.value = null;
   try {
@@ -293,9 +327,7 @@ async function copy(text: string) {
     document.execCommand('copy');
     ta.remove();
   }
-  copied.value = true;
-  clearTimeout(copiedTimer);
-  copiedTimer = window.setTimeout(() => (copied.value = false), 1600);
+  note(L.rpt_copied);
 }
 
 // ---- export / print
@@ -430,7 +462,7 @@ onBeforeUnmount(() => {
       </button>
 
       <div class="vspacer" />
-      <span v-if="copied" class="rv-copied">✓ {{ L.rpt_copied }}</span>
+      <span v-if="copied" class="rv-copied">{{ copied === L.rpt_copying ? '' : '✓ ' }}{{ copied }}</span>
       <slot name="actions" />
       <span v-if="recordCount >= 0" class="vcount">{{ recordsText }}</span>
     </div>
@@ -465,6 +497,11 @@ onBeforeUnmount(() => {
 
     <!-- right-click on a page -->
     <div v-if="menu" ref="menuEl" class="rv-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @contextmenu.prevent>
+      <button type="button" class="rv-menu-image" @click="copyImage(menu.page)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" /></svg>
+        {{ L.rpt_copy_image }} <span class="rv-menu-hint">{{ L.rpt_page_n.replace('{n}', String(menu.page + 1)) }}</span>
+      </button>
+      <div class="rv-menu-sep" />
       <button v-if="menu.sel" type="button" @click="copy(menu.sel)">{{ L.rpt_copy }}</button>
       <button v-if="menu.value" type="button" @click="copy(menu.value)">
         {{ L.rpt_copy_value }} <span class="rv-menu-hint">{{ short(menu.value) }}</span>
@@ -584,6 +621,7 @@ onBeforeUnmount(() => {
   color: var(--teal-deep);
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 .exp {
   position: relative;
@@ -630,6 +668,15 @@ onBeforeUnmount(() => {
 .rv-menu button:hover {
   background: var(--teal-soft);
   color: var(--teal-deep);
+}
+.rv-menu .rv-menu-image {
+  align-items: center;
+  font-weight: 500;
+}
+.rv-menu-image svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
 }
 .rv-menu-hint {
   margin-left: auto;
