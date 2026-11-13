@@ -3,6 +3,7 @@ import type { jsPDF as JsPDF } from 'jspdf';
 import type { Prim, RenderedDoc } from '../engine/doc';
 import { fontCss, textWidth, type FontSpec } from '../engine/measure';
 import { isGoogleFont } from '../engine/fonts';
+import { webFallback } from '../engine/fontAliases';
 import type { LineStyle, Watermark } from '../model/types';
 import { PT } from '../model/defaults';
 import { loadImage, normColor, svgToCanvas } from './raster';
@@ -98,7 +99,8 @@ async function drawPrim(pdf: JsPDF, p: Prim) {
     case 'text': {
       if (!p.text) return;
       // PDF standard fonts cover Latin text in system fonts; other scripts and Google fonts are drawn as images
-      if (!latin1(p.text) || isGoogleFont(p.font.family)) return rasterText(pdf, p);
+      // fonts jsPDF does not have are drawn as images: non-Latin text, Google fonts, Khmer OS fonts (Google stand-in)
+      if (!latin1(p.text) || isGoogleFont(p.font.family) || webFallback(p.font.family)) return rasterText(pdf, p);
       const [name, style] = pdfFont(p.font);
       pdf.setFont(name, style);
       pdf.setFontSize(p.font.size);

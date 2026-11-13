@@ -2,6 +2,7 @@
 import type { Prim, RenderedPage } from '../engine/doc';
 import type { LineStyle, Watermark } from '../model/types';
 import { PT } from '../model/defaults';
+import { familyList } from '../engine/fontAliases';
 
 export const escXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const n = (v: number) => (Math.round(v * 100) / 100).toString();
@@ -15,7 +16,8 @@ export function dash(ls: LineStyle | undefined, w: number): string {
 
 const CRISP = ' shape-rendering="crispEdges"';
 
-export const familyAttr = (f: string) => `'${f.replace(/'/g, '')}', Arial, sans-serif`;
+/** SVG font-family: the font, its Google stand-in for Khmer OS fonts (see fontAliases), Arial */
+export const familyAttr = (f: string) => familyList(f, "'");
 
 /**
  * On screen: device pixels per page unit. Line widths are then rounded to whole device pixels so equal lines look

@@ -11,6 +11,7 @@ import type {
   TableCell,
   Watermark,
 } from './types';
+import { familyList } from '../engine/fontAliases';
 
 export const uid = (p = '') => p + Math.random().toString(36).slice(2, 10);
 
@@ -427,7 +428,7 @@ export function resolveStyle(r: ReportDef, styleName: string | undefined, style:
 }
 
 export function cssFont(s: { fontFamily: string; fontSize: number; bold: boolean; italic: boolean }, scale = 1) {
-  return `${s.italic ? 'italic ' : ''}${s.bold ? 'bold ' : ''}${(s.fontSize * PT * scale).toFixed(2)}px "${s.fontFamily}", Arial, sans-serif`;
+  return `${s.italic ? 'italic ' : ''}${s.bold ? 'bold ' : ''}${(s.fontSize * PT * scale).toFixed(2)}px ${familyList(s.fontFamily)}`;
 }
 
 /** Make sure every band referenced by a group exists and stale bands are removed. */

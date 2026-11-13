@@ -4,6 +4,7 @@ import { PT } from '../model/defaults';
 import { aggregateValues, compareValues, evalExpr, type EvalContext } from './expression';
 import { defaultToString, formatValue, type FormatOptions } from './format';
 import { textWidth, fitText, type FontSpec } from './measure';
+import { familyList } from './fontAliases';
 
 export const DEFAULT_PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
 
@@ -100,9 +101,9 @@ export function chartSvg(el: ChartElement, data: ChartData, w: number, h: number
   const pal = el.palette ? el.palette.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_PALETTE;
   const colorAt = (i: number) => pal[i % pal.length];
   const px = font.size * PT;
-  const fam = esc(font.family);
+  const fam = esc(familyList(font.family, "'"));
   const txt = (x: number, y: number, s: string, opts: { anchor?: string; size?: number; bold?: boolean; fill?: string; rotate?: number } = {}) =>
-    `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${fam}, Arial, sans-serif" font-size="${(opts.size ?? px).toFixed(1)}"${opts.bold ? ' font-weight="bold"' : ''} fill="${opts.fill ?? color}" text-anchor="${opts.anchor ?? 'start'}"${
+    `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-family="${fam}" font-size="${(opts.size ?? px).toFixed(1)}"${opts.bold ? ' font-weight="bold"' : ''} fill="${opts.fill ?? color}" text-anchor="${opts.anchor ?? 'start'}"${
       opts.rotate ? ` transform="rotate(${opts.rotate} ${x.toFixed(1)} ${y.toFixed(1)})"` : ''
     }>${esc(s)}</text>`;
   const out: string[] = [];

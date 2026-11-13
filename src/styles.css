@@ -981,6 +981,16 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.fpk-note {
+  flex: none;
+  max-width: 45%;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .fpk-custom {
   color: var(--accent-2);
   border-top: 1px solid var(--border);

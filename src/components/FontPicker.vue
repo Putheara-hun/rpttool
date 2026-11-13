@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ChevronDown, Cloud, Search } from 'lucide-vue-next';
 import { GOOGLE_FONTS, SYSTEM_FONTS, isGoogleFont, loadFontPreview, loadGoogleFont, previewFamily, usedFamilies, type FontCategory } from '../engine/fonts';
+import { KHMER_OS_FONTS, khmerOsNamesOf, webFallback } from '../engine/fontAliases';
 import { mutate, notify, state } from '../store/designer';
 
 const props = withDefaults(defineProps<{ modelValue?: string; placeholder?: string; disabled?: boolean; width?: string }>(), { width: '140px' });
@@ -20,11 +21,21 @@ const busy = ref('');
 
 const current = computed(() => props.modelValue || props.placeholder || '');
 const extra = computed(() => state.report.fonts ?? []);
-/** how a name is drawn in the list: system fonts directly, Google fonts through a tiny preview face */
-const face = (f: string) => (isGoogleFont(f, extra.value) ? `"${f}", "${previewFamily(f)}", sans-serif` : `"${f}", sans-serif`);
+/**
+ * How a name is drawn in the list: system fonts directly, Google fonts through a tiny preview face,
+ * Khmer OS fonts in themselves when installed, otherwise in their Google version.
+ */
+function face(f: string) {
+  if (isGoogleFont(f, extra.value)) return `"${f}", "${previewFamily(f)}", sans-serif`;
+  const fb = webFallback(f);
+  return fb ? `"${f}", "${fb}", "${previewFamily(fb)}", sans-serif` : `"${f}", sans-serif`;
+}
+/** the Google family whose preview face an item needs */
+const previewOf = (it: Item) => (it.google ? it.family : webFallback(it.family));
 
 interface Item {
   family: string;
+  /** small grey text after the name; also searched ("Khmer OS Battambang" finds Battambang) */
   note?: string;
   google: boolean;
 }
@@ -34,7 +45,7 @@ const groups = computed(() => {
   const used = [...usedFamilies(state.report)].sort();
   const out: { title: string; items: Item[] }[] = [];
   const push = (title: string, items: Item[]) => {
-    const list = items.filter((i) => match(i.family));
+    const list = items.filter((i) => match(i.family) || (!!i.note && match(i.note)));
     if (list.length) out.push({ title, items: list });
   };
   push(
@@ -42,8 +53,16 @@ const groups = computed(() => {
     used.map((u) => ({ family: u, google: isGoogleFont(u, extra.value) })),
   );
   if (extra.value.length) push('Added Google fonts', extra.value.filter((x) => !used.includes(x)).map((x) => ({ family: x, google: true })));
+  push(
+    'Khmer OS — Google version where not installed',
+    KHMER_OS_FONTS.map((k) => ({ family: k, note: '☁ ' + webFallback(k), google: false })),
+  );
   const cats: FontCategory[] = ['Khmer', 'Sans serif', 'Serif', 'Monospace', 'Display', 'Handwriting', 'Thai / Lao'];
-  for (const c of cats) push(`Google Fonts — ${c}`, GOOGLE_FONTS.filter((g) => g.cat === c).map((g) => ({ family: g.family, google: true })));
+  for (const c of cats)
+    push(
+      `Google Fonts — ${c}`,
+      GOOGLE_FONTS.filter((g) => g.cat === c).map((g) => ({ family: g.family, note: khmerOsNamesOf(g.family).join(' / ') || undefined, google: true })),
+    );
   push(
     'Installed on this computer',
     SYSTEM_FONTS.map((s) => ({ family: s, google: false })),
@@ -126,9 +145,11 @@ function onOutside(e: MouseEvent) {
 async function choose(family: string) {
   close();
   emit('update:modelValue', family);
-  if (isGoogleFont(family, extra.value)) {
-    const ok = await loadGoogleFont(family);
-    if (!ok) notify(`Could not load "${family}" from Google Fonts (check the internet connection)`, 'error');
+  // a Google font, or the Google version of a Khmer OS font (shown where the Khmer OS font is not installed)
+  const web = isGoogleFont(family, extra.value) ? family : webFallback(family);
+  if (web) {
+    const ok = await loadGoogleFont(web);
+    if (!ok) notify(`Could not load "${web}" from Google Fonts (check the internet connection)`, 'error');
   }
 }
 async function useCustom() {
@@ -195,12 +216,13 @@ function onKey(e: KeyboardEvent) {
             v-for="it in g.items"
             :key="g.title + it.family"
             class="fpk-item"
-            :data-family="it.google ? it.family : undefined"
+            :data-family="previewOf(it)"
             :class="{ hi: options[hi] === it.family, cur: it.family === current }"
             @mouseenter="hi = options.indexOf(it.family)"
             @click="choose(it.family)"
           >
             <span class="fpk-sample" :style="{ fontFamily: face(it.family) }">{{ it.family }}</span>
+            <span v-if="it.note" class="fpk-note">{{ it.note }}</span>
             <Cloud v-if="it.google" :size="12" class="muted" title="Google font (downloaded when used)" />
           </div>
         </template>

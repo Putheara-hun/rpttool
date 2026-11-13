@@ -3,6 +3,18 @@
 import { ref } from 'vue';
 import type { ReportDef, StyleProps } from '../model/types';
 import { clearMeasureCache } from './measure';
+import { webFallback } from './fontAliases';
+
+/** the families plus the Google stand-ins of Khmer OS fonts among them ("Khmer OS Battambang" -> + "Battambang") */
+const withFallbacks = (families: Iterable<string>) => {
+  const out = new Set<string>();
+  for (const f of families) {
+    out.add(f);
+    const fb = webFallback(f);
+    if (fb) out.add(fb);
+  }
+  return out;
+};
 
 export type FontCategory = 'Khmer' | 'Sans serif' | 'Serif' | 'Monospace' | 'Display' | 'Handwriting' | 'Thai / Lao';
 export interface WebFont {
@@ -113,9 +125,12 @@ export function usedFamilies(r: ReportDef): Set<string> {
   return out;
 }
 
-/** Load every Google font the report uses (call before measuring / rendering). */
+/**
+ * Load every Google font the report uses (call before measuring / rendering), including the Google versions of
+ * Khmer OS fonts: a computer that has "Khmer OS Battambang" installed uses it, any other one shows "Battambang".
+ */
 export async function ensureReportFonts(r: ReportDef): Promise<void> {
-  const fams = [...usedFamilies(r)].filter((f) => isGoogleFont(f, r.fonts ?? []));
+  const fams = [...withFallbacks(usedFamilies(r))].filter((f) => isGoogleFont(f, r.fonts ?? []));
   if (fams.length) await Promise.all(fams.map(loadGoogleFont));
 }
 
@@ -139,7 +154,7 @@ export function loadFontPreview(family: string) {
 
 /** Google Fonts stylesheet links for an HTML page (families that are web fonts). */
 export function googleFontsLink(families: Iterable<string>, extra: string[] = []): string {
-  const list = [...new Set(families)].filter((f) => isGoogleFont(f, extra));
+  const list = [...withFallbacks(families)].filter((f) => isGoogleFont(f, extra));
   if (!list.length) return '';
   const fam = list.map((f) => 'family=' + encodeURIComponent(f).replace(/%20/g, '+') + (CATALOG.get(f.toLowerCase())?.bold ? ':wght@400;700' : '')).join('&');
   return `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?${fam}&display=swap">`;
@@ -148,7 +163,7 @@ export function googleFontsLink(families: Iterable<string>, extra: string[] = []
 /** @font-face rules with the font files embedded (SVG rendered as an image cannot load fonts itself). */
 const embedded = new Map<string, Promise<string>>();
 export function embeddedFontCss(families: Iterable<string>): Promise<string> {
-  const jobs = [...new Set(families)]
+  const jobs = [...withFallbacks(families)]
     .filter((f) => loaded.has(f))
     .map((f) => {
       let p = embedded.get(f);

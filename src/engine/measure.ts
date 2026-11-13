@@ -1,5 +1,6 @@
 // Text measurement & line breaking (canvas based, cached).
 import { PT } from '../model/defaults';
+import { familyList } from './fontAliases';
 
 export interface FontSpec {
   family: string;
@@ -8,7 +9,7 @@ export interface FontSpec {
   italic: boolean;
 }
 
-export const fontCss = (f: FontSpec) => `${f.italic ? 'italic ' : ''}${f.bold ? 'bold ' : ''}${(f.size * PT).toFixed(2)}px "${f.family}", Arial, sans-serif`;
+export const fontCss = (f: FontSpec) => `${f.italic ? 'italic ' : ''}${f.bold ? 'bold ' : ''}${(f.size * PT).toFixed(2)}px ${familyList(f.family)}`;
 
 let ctx2d: CanvasRenderingContext2D | null = null;
 function getCtx(): CanvasRenderingContext2D | null {

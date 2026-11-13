@@ -60,10 +60,6 @@ function loadFixed() {
   }
 }
 
-/**
- * Same server + database + login -> same id. Connections are kept in memory, so after a restart a report's
- * connection is gone; creating it again with the same details brings back the id the report refers to.
- */
 function stableId(c) {
   const key = ['provider', 'host', 'port', 'instance', 'database', 'user', 'auth', 'domain', 'file', 'connectString'].map((k) => String(c[k] ?? '').trim().toLowerCase()).join('|');
   return 'c-' + crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
@@ -71,13 +67,10 @@ function stableId(c) {
 function persist() {
   if (!PERSIST) return;
   fs.mkdirSync(DIR, { recursive: true });
-  // connections from REPORTTOOL_CONNECTIONS come from the environment every start: never written to disk
   fs.writeFileSync(FILE, JSON.stringify([...conns.values()].filter((c) => !c.fixed), null, 2), { mode: 0o600 });
 }
 const pick =(c) => Object.fromEntries(FIELDS.filter((k) => c[k] !== undefined).map((k) => [k, c[k]]));
 const hasPassword = (c) => c.provider === 'sqlite' || memory.has(c.id) || typeof c.password === 'string';
-
-/** Public view: never includes the password. */
 export function publicConn(c) {
   const { password, ...rest } = c;
   return { ...rest, hasPassword: hasPassword(c) };
