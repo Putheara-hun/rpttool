@@ -26,7 +26,9 @@ const TYPES = {
 const api = createApiHandler();
 
 function serveStatic(req, res) {
-  const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+  let urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+  // the Report Viewer also answers on /viewer
+  if (urlPath === '/viewer' || urlPath === '/viewer/') urlPath = '/viewer.html';
   let file = path.normalize(path.join(ROOT, urlPath));
   if (!file.startsWith(ROOT)) {
     res.statusCode = 403;

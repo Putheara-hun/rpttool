@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { fileURLToPath } from 'node:url';
 // @ts-ignore - plain ESM module without type declarations
 import { createApiHandler } from './server/api.mjs';
 
@@ -20,5 +21,14 @@ export default defineConfig({
   plugins: [vue(), reportToolApi()],
   base: './',
   server: { port: 5173, open: false, host: 'localhost' },
-  build: { chunkSizeWarningLimit: 2000 },
+  build: {
+    chunkSizeWarningLimit: 2000,
+    // two pages: the designer (index.html) and the Report Viewer (viewer.html)
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        viewer: fileURLToPath(new URL('./viewer.html', import.meta.url)),
+      },
+    },
+  },
 });

@@ -105,6 +105,8 @@ export const state = reactive({
   rightTab: 'properties' as 'properties' | 'explorer',
   /** running inside another system (iframe): the host stores the reports, no local files / autosave */
   embedded: false,
+  /** the Report Viewer page (viewer.html): shows reports, edits nothing */
+  viewer: false,
 });
 
 /** Loaded rows per data source id (kept non-deep-reactive for speed). */
@@ -1604,7 +1606,12 @@ export async function ensureData(force = false) {
         }
       } catch (e) {
         if (gen !== dataGeneration) return;
-        dataErrors[ds.id] = (e as Error).message;
+        dataErrors[ds.id] =
+          // Report Viewer: the database is out of reach -> say what the system showing the report can do
+          state.viewer && ds.kind === 'sql' && e instanceof DbError && (e.noService || e.missingConnection)
+            ? `its rows come from the database connection "${ds.sql?.connectionName || ds.sql?.connectionId || '?'}", which this viewer cannot use. ` +
+              `The application that shows the report should send them: data: { "${ds.name}": rows }.`
+            : (e as Error).message;
         dataCache[ds.id] = markRaw([]);
         delete dataKeys[ds.id];
       } finally {
@@ -1827,7 +1834,13 @@ export const saveReportAs = (format: SaveFormat) => saveReport(true, format);
  * A report design from text: ReportTool JSON, RDL XML (ReportTool's own or from SSRS / Report Builder) or an HTML page
  * saved by ReportTool. The format is taken from the name / hint, otherwise recognised from the text.
  */
-export async function parseReportText(text: string, name = 'report', hint?: SaveFormat): Promise<{ def: ReportDef; warnings: string[] }> {
+export async function parseReportText(
+  text: string,
+  name = 'report',
+  hint?: SaveFormat,
+  /** RDL changed in another program since ReportTool saved it: ask, use the RDL as it is now, or the design inside */
+  modified: 'ask' | 'rdl' | 'own' = 'ask',
+): Promise<{ def: ReportDef; warnings: string[] }> {
   const t = text.replace(/^﻿/, '');
   let fmt = hint ?? formatOf(name);
   if (!hint && fmt === 'rptx') {
@@ -1842,9 +1855,11 @@ export async function parseReportText(text: string, name = 'report', hint?: Save
     const useOwn =
       own &&
       (!own.modified ||
-        !confirm(
-          `"${name}" was changed in another program (e.g. Report Builder) after ReportTool saved it.\n\nOK = import the RDL as it is now (its current layout)\nCancel = open the ReportTool design saved inside the file`,
-        ));
+        modified === 'own' ||
+        (modified === 'ask' &&
+          !confirm(
+            `"${name}" was changed in another program (e.g. Report Builder) after ReportTool saved it.\n\nOK = import the RDL as it is now (its current layout)\nCancel = open the ReportTool design saved inside the file`,
+          )));
     if (own && useOwn) def = own.def;
     else {
       const { importRdl } = await import('../import/rdl');

@@ -61,9 +61,16 @@ function readJson(req) {
 }
 
 /** Resolve a connection of this browser (public mode) by id and make sure we know its password. */
-async function connFor(id, owner) {
-  const c = getConnection(id, owner);
-  if (!c) throw new ApiError(`Database connection "${id}" was not found. Choose or create a connection in the data source settings.`, 404, { missingConnection: true });
+async function connFor(id, owner, name) {
+  // by id; else by the connection name saved in the report (the same connection created again after a restart)
+  const c = getConnection(id, owner) ?? (name ? getConnection(String(name), owner) : null);
+  if (!c) {
+    throw new ApiError(
+      `The database connection "${name || id}" is not set up here. Add it in the designer on this website (Data Sources ▸ New connection…), or let the application send this report's rows.`,
+      404,
+      { missingConnection: true },
+    );
+  }
   if (needsPassword(c)) throw new ApiError(`Log in to "${c.name}" to continue.`, 401, { needLogin: true, connectionId: c.id, name: c.name, user: c.user });
   await assertPublicTarget(c);
   return c;
@@ -127,7 +134,7 @@ async function route(method, url, body, owner, req) {
     return (await driver(c.provider)).params(c, body.object ?? {});
   }
   if (method === 'POST' && path === '/api/db/execute') {
-    const c = await connFor(body.connectionId, owner);
+    const c = await connFor(body.connectionId, owner, body.connectionName);
     const src = body.source ?? {};
     if (src.mode === 'query' && !String(src.query ?? '').trim()) throw new ApiError('Enter a SQL query.');
     if (src.mode !== 'query' && !src.name) throw new ApiError('Choose a table, view, procedure or function.');

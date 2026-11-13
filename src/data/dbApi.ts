@@ -150,6 +150,8 @@ export function resolveSqlParams(src: SqlSource, ctx: Partial<EvalContext>): { n
 export function executeSql(src: SqlSource, params: { name: string; type: ParamType; value: unknown }[], maxRows: number) {
   return api<DbResult>('POST', './api/db/execute', {
     connectionId: src.connectionId,
+    // the name lets the server find the connection when it was created again (new id) after a restart
+    connectionName: src.connectionName,
     source: {
       mode: src.mode,
       schema: src.schema,

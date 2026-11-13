@@ -736,6 +736,73 @@ textarea {
   line-height: 1.5;
 }
 
+/* Report Viewer (viewer.html) */
+.viewer-app .titlebar .doc-title {
+  text-align: left;
+}
+.viewer-app .titlebar .viewer-open {
+  margin-left: auto;
+  background: #fff;
+  color: var(--accent-2);
+  border-color: #fff;
+}
+.viewer-warn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.viewer-warn span {
+  flex: 1;
+}
+.vw-wait {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.vw-start {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow: auto;
+  background: var(--bg);
+}
+.vw-card {
+  width: 100%;
+  max-width: 720px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 24px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.08);
+}
+.vw-card h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+.vw-card p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.vw-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  height: 220px;
+  padding: 8px;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
 /* Database (SQL) data source on a website without the ReportTool server */
 .no-db {
   border: 1px solid #fcd34d;

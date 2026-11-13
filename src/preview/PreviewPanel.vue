@@ -26,6 +26,9 @@ import { pageToSvg } from '../export/svg';
 import { ensureReportFonts } from '../engine/fonts';
 import { dataErrors, ensureData, notify, rowsFor, state } from '../store/designer';
 
+/** rendered: the pages are ready (the Report Viewer tells its host system) */
+const emit = defineEmits<{ rendered: [pages: number]; failed: [message: string] }>();
+
 const doc = shallowRef<RenderedDoc | null>(null);
 const busy = ref(false);
 const busyText = ref('Generating report…');
@@ -62,9 +65,11 @@ async function generate(reloadData = false) {
     doc.value = markRaw(d);
     svgCache.clear();
     matches.value = [];
+    emit('rendered', d.pages.length);
   } catch (e) {
     error.value = (e as Error).message;
     console.error(e);
+    emit('failed', error.value);
   } finally {
     busy.value = false;
   }
@@ -182,6 +187,9 @@ function paramInput(name: string, v: unknown) {
 function paramValue(p: { name: string; defaultValue: string }) {
   return p.name in state.paramValues ? (state.paramValues[p.name] as any) : p.defaultValue;
 }
+
+/** for the Report Viewer: its host system can refresh, print and export */
+defineExpose({ generate, print: doPrint, exportAs: doExport, pageCount });
 
 onMounted(() => {
   measure();

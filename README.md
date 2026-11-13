@@ -23,6 +23,34 @@ The simplest way to keep reports in another system: no integration needed.
 - XML (RDL) also opens in SQL Server Reporting Services / Report Builder; HTML is the finished report with its data
   (prints from any browser); JSON is the smallest.
 
+## Report Viewer (text → report)
+
+`/viewer` (or `/viewer.html`) shows a report from its **text** — the XML (RDL), HTML or JSON copied with
+**Copy Text**, or an RDL file from Report Builder — with pages, zoom, find, parameters, refresh, print and export
+(PDF, Excel, CSV, HTML, PNG). Nothing can be edited there.
+
+- **By hand:** open `/viewer`, paste the text (or open / drop a file) → **Show report**.
+- **From your system** (`viewer.js`, next to the viewer):
+  ```html
+  <div id="report" style="height: 80vh"></div>
+  <script src="https://<your-site>/viewer.js"></script>
+  <script>
+    const viewer = ReportViewer.embed(document.getElementById('report'), {
+      report: textFromYourDatabase,          // XML / HTML / JSON
+      data: { DataSet1: rows },             // optional: rows per data source NAME in the design
+      params: { TITLE: 'Loan Outstanding' } // optional: parameter values ({?TITLE} works even if not declared)
+    });
+    // later: viewer.load(text, { data, params }), viewer.setData(name, rows), viewer.setParams({...}),
+    //        viewer.refresh(), viewer.print(), viewer.exportAs('pdf' | 'xlsx' | 'csv' | 'html' | 'png')
+  </script>
+  ```
+  `ReportViewer.open({ report, data, params })` shows it in a new browser tab instead (call it from a click).
+- **Where the rows come from:** rows sent by your system win; otherwise the data saved in the text (JSON / CSV
+  sources, rows sent while designing); otherwise a database source runs through this site's server when the
+  browser has that connection (designer and viewer on the same site), found by id or by connection name.
+- Showing it **inside** another site's page (iframe) needs that site's address in `REPORTTOOL_FRAME_ANCESTORS`
+  (e.g. `https://erp.example.com`); a new tab needs nothing. Only the page that opened the viewer can talk to it.
+
 ## Embed the designer in another system (design only, output as text)
 
 The host system shows the designer in an iframe; when the user clicks **Save** the designer hands the report back
