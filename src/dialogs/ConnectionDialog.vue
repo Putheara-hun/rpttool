@@ -1,17 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { CircleCheck, Database, PlugZap, CircleX } from 'lucide-vue-next';
 import Modal from '../components/Modal.vue';
 import { DbError, PROVIDERS, saveConnection, serverHealth, testConnection, type DbConnection, type Provider } from '../data/dbApi';
 
-const props = defineProps<{ connection?: DbConnection | null }>();
+const props = defineProps<{
+  connection?: DbConnection | null;
+  /** a report's connection is missing or its login was refused: ask again, test, then save */
+  reconnect?: { reason: string; dataSource?: string } | null;
+}>();
 const emit = defineEmits<{ close: []; saved: [c: DbConnection] }>();
 
 const editing = !!props.connection?.id;
 const c = ref<DbConnection>({
   name: '',
   provider: 'mssql',
-  host: 'localhost',
+  host: props.reconnect ? '' : 'localhost',
   port: 1433,
   database: '',
   user: '',
@@ -128,11 +132,37 @@ async function save() {
     saving.value = false;
   }
 }
+/** reconnect: log in first, keep the connection only when the database accepts it */
+async function connect() {
+  saving.value = true;
+  result.value = null;
+  try {
+    const p = payload();
+    await testConnection(p);
+    emit('saved', await saveConnection(p));
+  } catch (e) {
+    result.value = { ok: false, text: (e as Error).message };
+  } finally {
+    saving.value = false;
+  }
+}
+const title = computed(() => (props.reconnect ? 'Connect to database' : editing ? 'Edit Database Connection' : 'New Database Connection'));
+// reconnecting a known server: the password is what is missing -> start there
+const passwordBox = ref<HTMLInputElement>();
+onMounted(() => {
+  if (props.reconnect && c.value.host) setTimeout(() => passwordBox.value?.focus(), 0);
+});
 </script>
 
 <template>
-  <Modal :title="editing ? 'Edit Database Connection' : 'New Database Connection'" :width="640" @close="emit('close')">
+  <Modal :title="title" :width="640" @close="emit('close')">
     <template #icon><Database :size="16" /></template>
+    <div v-if="reconnect" class="reconnect-note">
+      <div>
+        <b>{{ reconnect.dataSource ? `Data source "${reconnect.dataSource}"` : 'This report' }}</b> could not read its data: {{ reconnect.reason }}
+      </div>
+      <div>Enter the server, user name and password to connect again.</div>
+    </div>
     <div v-if="noService" class="row err" style="align-items: flex-start; margin-bottom: 12px">
       <CircleX :size="16" style="flex: none" />
       <span>{{ noService }}</span>
@@ -192,7 +222,14 @@ async function save() {
         <label>User name</label>
         <input v-model="c.user" autocomplete="username" />
         <label>Password</label>
-        <input v-model="password" type="password" autocomplete="current-password" :placeholder="editing ? (c.hasPassword ? '(unchanged)' : 'enter password') : ''" />
+        <input
+          ref="passwordBox"
+          v-model="password"
+          type="password"
+          autocomplete="current-password"
+          :placeholder="reconnect ? 'enter the password' : editing ? (c.hasPassword ? '(unchanged)' : 'enter password') : ''"
+          @keydown.enter="reconnect && connect()"
+        />
         <label>Options</label>
         <div class="col" style="gap: 4px">
           <template v-if="c.provider === 'mssql'">
@@ -217,10 +254,17 @@ async function save() {
       <span style="word-break: break-word">{{ result.text }}</span>
     </div>
     <template #footer>
-      <button class="btn" :disabled="testing || !!noService" @click="test"><PlugZap :size="14" /> {{ testing ? 'Testing…' : 'Test connection' }}</button>
-      <span class="grow" />
-      <button class="btn" @click="emit('close')">Cancel</button>
-      <button class="btn primary" :disabled="saving || !!noService" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
+      <template v-if="reconnect">
+        <span class="grow" />
+        <button class="btn" @click="emit('close')">Cancel</button>
+        <button class="btn primary" :disabled="saving || !!noService" @click="connect"><PlugZap :size="14" /> {{ saving ? 'Connecting…' : 'Connect' }}</button>
+      </template>
+      <template v-else>
+        <button class="btn" :disabled="testing || !!noService" @click="test"><PlugZap :size="14" /> {{ testing ? 'Testing…' : 'Test connection' }}</button>
+        <span class="grow" />
+        <button class="btn" @click="emit('close')">Cancel</button>
+        <button class="btn primary" :disabled="saving || !!noService" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
+      </template>
     </template>
   </Modal>
 </template>

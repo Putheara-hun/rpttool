@@ -76,11 +76,14 @@ export class DbError extends Error {
   noService?: boolean;
   /** the server has a team password and this browser is not signed in */
   authRequired?: boolean;
+  /** the database refused the saved login of this connection (wrong user / password, …) */
+  authFailed?: boolean;
   constructor(message: string, status = 0, extra: any = {}) {
     super(message);
     this.status = status;
     this.noService = extra.noService;
     this.authRequired = extra.authRequired;
+    this.authFailed = extra.authFailed;
     this.needLogin = extra.needLogin;
     this.missingConnection = extra.missingConnection;
     this.connectionId = extra.connectionId;

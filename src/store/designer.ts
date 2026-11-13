@@ -22,7 +22,7 @@ import {
   type ToolId,
 } from '../model/defaults';
 import { inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
-import { DbError, listConnections, resolveSqlParams, setAuthHandler } from '../data/dbApi';
+import { DbError, listConnections, resolveSqlParams, setAuthHandler, type DbConnection } from '../data/dbApi';
 import { compileCalcFields, paramValues, renderReport } from '../engine/renderer';
 import {
   cellOwners,
@@ -92,6 +92,8 @@ export const state = reactive({
   dialogProps: null as any,
   exprRequest: null as ExprRequest | null,
   loginRequests: [] as LoginRequest[],
+  /** "Connect to database" dialogs: a report's connection is missing or its login was refused */
+  reconnectRequests: [] as ReconnectRequest[],
   /** open sign-in dialog for the team password (REPORTTOOL_PASSWORD on the server) */
   siteLogin: null as { resolve: (ok: boolean) => void } | null,
   formatBrush: null as FormatBrush | null,
@@ -1581,6 +1583,8 @@ function dataKey(ds: DataSourceDef, ctx: ReturnType<typeof dataParamCtx>) {
 
 /** Load (or reload) data sources. Database sources re-query when their definition or parameter values change. */
 export async function ensureData(force = false) {
+  // Refresh: connections the user cancelled may be asked for again
+  if (force) declinedReconnects.clear();
   const ctx = dataParamCtx();
   const jobs = state.report.dataSources.map((ds) => {
     const key = dataKey(ds, ctx);
@@ -1626,7 +1630,10 @@ export async function ensureData(force = false) {
   await Promise.all(jobs);
 }
 
-/** Run a data source; when its database connection needs a password, ask for it and retry once. */
+/**
+ * Run a data source. When its database connection needs a password, ask for it; when the connection is missing
+ * (e.g. the server restarted) or its login was refused, ask for server / user / password again — then retry once.
+ */
 export async function loadWithLogin(ds: DataSourceDef, ctx: Partial<EvalContext>, maxRows?: number): Promise<Row[]> {
   try {
     return await loadDataSource(ds, ctx, maxRows);
@@ -1634,7 +1641,76 @@ export async function loadWithLogin(ds: DataSourceDef, ctx: Partial<EvalContext>
     if (e instanceof DbError && e.needLogin && e.connectionId) {
       if (await requestLogin(e.connectionId, e.connectionName ?? ds.sql?.connectionName ?? '')) return await loadDataSource(ds, ctx, maxRows);
     }
+    // not in the Report Viewer: there the application sends the rows
+    if (e instanceof DbError && (e.missingConnection || e.authFailed) && ds.kind === 'sql' && ds.sql && !state.viewer) {
+      const c = await requestReconnect({ connectionId: ds.sql.connectionId, connectionName: ds.sql.connectionName, reason: e.message, dataSource: ds.name, missing: e.missingConnection });
+      if (c?.id) {
+        relinkConnection(ds.sql.connectionId, ds.sql.connectionName, c);
+        return await loadDataSource(ds, ctx, maxRows);
+      }
+    }
     throw e;
+  }
+}
+
+export interface ReconnectRequest {
+  key: string;
+  /** what is known about the connection (no password) — prefilled in the dialog */
+  connection: DbConnection;
+  reason: string;
+  dataSource: string;
+  resolve: (c: DbConnection | null) => void;
+}
+const pendingReconnects = new Map<string, Promise<DbConnection | null>>();
+/** connections the user chose not to reconnect: not asked again until Refresh / another report */
+const declinedReconnects = new Set<string>();
+
+/**
+ * Ask for a report's database connection again (server, user name, password …). Several data sources of the same
+ * connection share one dialog. Resolves with the working connection, or null when cancelled.
+ */
+export function requestReconnect(o: { connectionId?: string; connectionName?: string; reason: string; dataSource: string; missing?: boolean }): Promise<DbConnection | null> {
+  const key = (o.connectionName || o.connectionId || '').toLowerCase();
+  // the server's own text for a missing connection gives general advice; here the window itself is the answer
+  const reason = o.missing ? `the database connection "${o.connectionName || o.connectionId}" is not set up on this website any more (for example after the website restarted).` : o.reason;
+  if (declinedReconnects.has(key)) return Promise.resolve(null);
+  let p = pendingReconnects.get(key);
+  if (!p) {
+    p = (async () => {
+      const known = (await listConnections().catch(() => [] as DbConnection[])).find((c) => c.id === o.connectionId || (!!o.connectionName && c.name === o.connectionName));
+      const connection: DbConnection = known ? { ...known, password: undefined } : { name: o.connectionName || '', provider: 'mssql' };
+      return await new Promise<DbConnection | null>((resolve) => {
+        state.reconnectRequests.push({
+          key,
+          connection,
+          reason,
+          dataSource: o.dataSource,
+          resolve: (c) => {
+            state.reconnectRequests = state.reconnectRequests.filter((r) => r.key !== key);
+            pendingReconnects.delete(key);
+            if (!c) declinedReconnects.add(key);
+            resolve(c);
+          },
+        });
+      });
+    })();
+    pendingReconnects.set(key, p);
+  }
+  return p;
+}
+
+/** Point every data source of the old connection (by id or name) at the connection that works now. */
+export function relinkConnection(oldId: string | undefined, oldName: string | undefined, c: DbConnection) {
+  for (const ds of state.report.dataSources) {
+    const s = ds.sql;
+    if (ds.kind !== 'sql' || !s) continue;
+    if ((oldId && s.connectionId === oldId) || (oldName && s.connectionName === oldName)) {
+      if (s.connectionId !== c.id || s.connectionName !== c.name) {
+        s.connectionId = c.id!;
+        s.connectionName = c.name;
+        state.dirty = true;
+      }
+    }
   }
 }
 export function invalidateData(dsId: string) {
@@ -1696,6 +1772,7 @@ export function loadReport(def: ReportDef, fileName?: string) {
   for (const k of Object.keys(dataCache)) delete dataCache[k];
   for (const k of Object.keys(dataKeys)) delete dataKeys[k];
   loading.clear();
+  declinedReconnects.clear();
   dataGeneration++;
   state.report = r;
   state.selection = [];

@@ -9,7 +9,7 @@ import { uid } from '../model/defaults';
 import { SAMPLE_SETS } from '../data/sampleData';
 import { coerceRows, inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
 import { DbError, executeSql, fieldsFromResult, providerLabel, resolveSqlParams } from '../data/dbApi';
-import { closeDialog, dataCache, dataParamCtx, ensureData, mutate, notify, requestLogin, state } from '../store/designer';
+import { closeDialog, dataCache, dataParamCtx, ensureData, mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
 import { defaultToString } from '../engine/format';
 
 const list = ref<DataSourceDef[]>(deepClone((state.report.dataSources)));
@@ -73,14 +73,23 @@ function remove() {
 async function previewSql(ds: DataSourceDef, detect: boolean) {
   const s = ds.sql;
   if (!s?.connectionId || (s.mode === 'query' ? !s.query?.trim() : !s.name)) return;
-  const raw = deepClone(s);
-  const run = () => executeSql(raw, resolveSqlParams(raw, dataParamCtx()), 200);
+  const run = () => {
+    const raw = deepClone(s);
+    return executeSql(raw, resolveSqlParams(raw, dataParamCtx()), 200);
+  };
   let r;
   try {
     r = await run();
   } catch (e) {
     if (e instanceof DbError && e.needLogin && e.connectionId && (await requestLogin(e.connectionId, e.connectionName ?? s.connectionName ?? ''))) r = await run();
-    else throw e;
+    else if (e instanceof DbError && (e.authFailed || e.missingConnection)) {
+      // the login was refused / the connection is gone: ask for server, user and password again
+      const c = await requestReconnect({ connectionId: s.connectionId, connectionName: s.connectionName, reason: e.message, dataSource: ds.name, missing: e.missingConnection });
+      if (!c?.id) throw e;
+      s.connectionId = c.id;
+      s.connectionName = c.name;
+      r = await run();
+    } else throw e;
   }
   const fields = fieldsFromResult(r, inferFields);
   if (detect || !ds.fields.length || fields.map((f) => f.name).join() !== ds.fields.map((f) => f.name).join()) ds.fields = fields;

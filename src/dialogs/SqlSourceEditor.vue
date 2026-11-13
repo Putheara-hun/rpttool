@@ -41,7 +41,7 @@ import {
   type DbObject,
   type DbSchema,
 } from '../data/dbApi';
-import { mutate, notify, requestLogin, state } from '../store/designer';
+import { mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
 
 const props = defineProps<{ source: SqlSource }>();
 const emit = defineEmits<{ preview: []; switchKind: [kind: 'json' | 'csv'] }>();
@@ -62,6 +62,16 @@ async function withLogin<T>(fn: () => Promise<T>): Promise<T> {
   } catch (e) {
     if (e instanceof DbError && e.needLogin && e.connectionId) {
       if (await requestLogin(e.connectionId, e.connectionName ?? current.value?.name ?? '')) {
+        await loadConnections();
+        return await fn();
+      }
+    }
+    // the login was refused / the connection is gone: ask for server, user and password again
+    if (e instanceof DbError && (e.authFailed || e.missingConnection) && src.connectionId) {
+      const c = await requestReconnect({ connectionId: src.connectionId, connectionName: src.connectionName ?? current.value?.name, reason: e.message, dataSource: '', missing: e.missingConnection });
+      if (c?.id) {
+        src.connectionId = c.id;
+        src.connectionName = c.name;
         await loadConnections();
         return await fn();
       }

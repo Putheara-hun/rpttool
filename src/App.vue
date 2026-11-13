@@ -37,6 +37,7 @@ import DialogHost from './dialogs/DialogHost.vue';
 import ExpressionEditor from './dialogs/ExpressionEditor.vue';
 import LoginDialog from './dialogs/LoginDialog.vue';
 import SiteLoginDialog from './dialogs/SiteLoginDialog.vue';
+import ReconnectDialog from './dialogs/ReconnectDialog.vue';
 import ContextMenu from './components/ContextMenu.vue';
 import {
   clearSelection,
@@ -107,7 +108,7 @@ const statusText = computed(() => {
 });
 
 function onKey(e: KeyboardEvent) {
-  if (state.dialog || state.exprRequest || state.loginRequests.length || state.siteLogin) return;
+  if (state.dialog || state.exprRequest || state.loginRequests.length || state.siteLogin || state.reconnectRequests.length) return;
   const t = e.target as HTMLElement;
   // only text-entry controls swallow shortcuts (checkboxes, radios, sliders, buttons do not)
   if (t instanceof HTMLInputElement && !['checkbox', 'radio', 'range', 'color', 'button'].includes(t.type)) return;
@@ -296,6 +297,7 @@ onBeforeUnmount(() => {
     <DialogHost />
     <ExpressionEditor v-if="state.exprRequest" />
     <LoginDialog v-if="state.loginRequests.length" :key="state.loginRequests[0].connectionId" />
+    <ReconnectDialog />
     <SiteLoginDialog v-if="state.siteLogin" />
     <ContextMenu />
     <div class="toasts">

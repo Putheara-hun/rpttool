@@ -165,9 +165,10 @@ export function createApiHandler() {
       });
     }
     if (req.method === 'OPTIONS' || req.headers['x-reporttool'] !== '1') return send(res, 403, { error: 'Forbidden' });
+    let body = {};
     try {
       const path = url.split('?')[0];
-      const body = req.method === 'POST' ? await readJson(req) : {};
+      body = req.method === 'POST' ? await readJson(req) : {};
       // public mode: this browser's anonymous id (handed out on its first request)
       const owner = visitorOf(req, res);
       if (req.method === 'GET' && path === '/api/health') {
@@ -187,7 +188,11 @@ export function createApiHandler() {
       send(res, 200, await route(req.method, url, body, owner, req));
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 400;
-      send(res, status, { error: friendly(e), ...(e instanceof ApiError ? e.extra : {}) });
+      const error = friendly(e);
+      // a saved connection whose login the database refuses: the designer asks for server / user / password again
+      const authFailed = !!body?.connectionId && LOGIN_FAILED.test(error);
+      send(res, status, { error, ...(e instanceof ApiError ? e.extra : {}), ...(authFailed ? { authFailed: true, connectionId: body.connectionId } : {}) });
     }
   };
 }
+const LOGIN_FAILED = /^Login failed|password authentication failed|ORA-01017|Access denied for user/i;
