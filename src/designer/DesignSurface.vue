@@ -31,7 +31,7 @@ import {
 import ElementView from './ElementView.vue';
 import FieldPicker from './FieldPicker.vue';
 import { specialFields } from './specialFields';
-import { bandCaption, contentWidth, type ToolId } from '../model/defaults';
+import { bandCaption, contentWidth, crosstabSize, syncCrosstabSize, type ToolId } from '../model/defaults';
 import { cellOwners, cellRectOf, columnMoveOrder, ownerOf, rangeOf } from '../model/table';
 import type { Band, CrosstabElement, ReportElement, SummaryFunc, TableElement } from '../model/types';
 import {
@@ -210,7 +210,10 @@ type Drag =
   | { kind: 'cells'; id: string }
   | { kind: 'tableBorder'; id: string; axis: 'col' | 'row'; index: number; start: Pt; orig: number[]; base: number; snapTo: number[]; neighbor: boolean; key: string }
   /** a column dragged by its grip above the table; `to` = the gap it goes to (null = stays) */
-  | { kind: 'colMove'; id: string; from: number; start: Pt; x: number; moved: boolean; to: number | null; blocked: boolean };
+  | { kind: 'colMove'; id: string; from: number; start: Pt; x: number; moved: boolean; to: number | null; blocked: boolean }
+  /** a line of a cross tab: `k` row headers / cells / rows lie before it, so they share the distance moved */
+  | { kind: 'ctBorder'; id: string; axis: 'col' | 'row'; prop: CtSizeProp; k: number; start: Pt; orig: number; key: string };
+type CtSizeProp = 'rowHeaderWidth' | 'cellWidth' | 'rowHeight';
 const drag = ref<Drag | null>(null);
 /** table column / row border under the mouse (cursor col-resize / row-resize) */
 const borderHover = ref<'col' | 'row' | null>(null);
@@ -305,6 +308,15 @@ function onMouseDown(e: MouseEvent) {
     e.preventDefault();
     return;
   }
+  // a line of a cross tab: drag to make the row header / the cells wider or the rows taller
+  const ctb = !e.altKey && !state.formatBrush && !state.tool ? crosstabBorderAt(p) : null;
+  if (ctb) {
+    if (state.selection.length !== 1 || state.selection[0] !== ctb.el.id) select([ctb.el.id]);
+    drag.value = { kind: 'ctBorder', id: ctb.el.id, axis: ctb.axis, prop: ctb.prop, k: ctb.k, start: p, orig: ctb.el[ctb.prop], key: 'ctborder:' + ctb.el.id + ':' + Date.now() };
+    startWindowDrag();
+    e.preventDefault();
+    return;
+  }
   const rz = t.closest<HTMLElement>('[data-band-resize]');
   if (rz) {
     const id = rz.dataset.bandResize!;
@@ -361,8 +373,9 @@ function onMouseDown(e: MouseEvent) {
     let selectOnly: string | null = null;
     if (el.type === 'table' && state.selection.length === 1 && state.selection[0] === id) {
       pickCell(el as TableElement, p);
-    } else if (el.type === 'crosstab' && state.selection.length === 1 && state.selection[0] === id) {
-      // a selected cross tab: the click picks its Rows / Columns / Data area (double-click it to choose a field)
+    } else if (el.type === 'crosstab') {
+      // a cross tab: the click selects it and its Rows / Columns / Data area at once (double-click = choose a field)
+      if (state.selection.length !== 1 || state.selection[0] !== id) select([id]);
       const zn = crosstabZoneAt(el, p);
       ctSel.value = zn ? { id, zone: zn.zone } : null;
     } else if (!state.selection.includes(id)) select([id]);
@@ -431,6 +444,27 @@ function tableBorderAt(p: Pt): { el: TableElement; axis: 'col' | 'row'; index: n
   }
   return null;
 }
+/**
+ * A line of a cross tab under a page point: the row header's right line (its width), the cell lines incl. the right
+ * edge (the cell width) and the row lines incl. the bottom edge (the row height).
+ */
+function crosstabBorderAt(p: Pt): { el: CrosstabElement; axis: 'col' | 'row'; prop: CtSizeProp; k: number } | null {
+  const tol = 4 / z.value;
+  const els = state.report.elements;
+  for (let i = els.length - 1; i >= 0; i--) {
+    const el = els[i];
+    if (el.type !== 'crosstab' || el.locked || !visibleBandIds.value.has(el.bandId)) continue;
+    const a = absRect(el);
+    if (p.x < a.x - tol || p.x > a.x + a.w + tol || p.y < a.y - tol || p.y > a.y + a.h + tol) continue;
+    const { cols, rows } = crosstabSize(el);
+    if (Math.abs(p.x - (a.x + el.rowHeaderWidth)) <= tol) return { el, axis: 'col', prop: 'rowHeaderWidth', k: 1 };
+    for (let k = 1; k <= cols; k++) if (Math.abs(p.x - (a.x + el.rowHeaderWidth + k * el.cellWidth)) <= tol) return { el, axis: 'col', prop: 'cellWidth', k };
+    for (let k = 1; k <= rows; k++) if (Math.abs(p.y - (a.y + k * el.rowHeight)) <= tol) return { el, axis: 'row', prop: 'rowHeight', k };
+    return null;
+  }
+  return null;
+}
+
 /** Start dragging a table column / row border. */
 function startBorderDrag(tb: { el: TableElement; axis: 'col' | 'row'; index: number }, p: Pt, shift: boolean) {
   const el = tb.el;
@@ -569,6 +603,19 @@ function onMove(e: MouseEvent) {
     }
     return;
   }
+  if (d.kind === 'ctBorder') {
+    const v = Math.max(d.prop === 'rowHeight' ? 12 : 20, Math.round(d.orig + (d.axis === 'col' ? p.x - d.start.x : p.y - d.start.y) / d.k));
+    mutateLive(d.key, (r) => {
+      const t = r.elements.find((x) => x.id === d.id);
+      if (!t || t.type !== 'crosstab') return;
+      t[d.prop] = v;
+      syncCrosstabSize(t);
+      const band = r.bands.find((b) => b.id === t.bandId);
+      const bottom = Math.max(0, ...r.elements.filter((x) => x.bandId === t.bandId).map((x) => x.y + x.height));
+      if (band && bottom > band.height) band.height = Math.ceil(bottom);
+    });
+    return;
+  }
   if (d.kind === 'colMove') {
     if (!d.moved && Math.abs(p.x - d.start.x) * z.value < 4) return;
     d.moved = true;
@@ -701,7 +748,7 @@ function onUp(e: MouseEvent) {
   drag.value = null;
   guides.value = { x: null, y: null };
   if (!d) return;
-  if (d.kind === 'tableBorder') {
+  if (d.kind === 'tableBorder' || d.kind === 'ctBorder') {
     endLive();
     return;
   }
@@ -1110,7 +1157,14 @@ const pointer = { inside: false, bandId: '', x: 0, y: 0 };
 function onPointerMove(e: MouseEvent) {
   const p = toPage(e);
   const onHandle = !!(e.target as HTMLElement)?.closest?.('[data-handle], [data-col-grip]');
-  const hb = drag.value ? (drag.value.kind === 'tableBorder' ? drag.value.axis : null) : !state.tool && !e.altKey && !onHandle ? (tableBorderAt(p)?.axis ?? null) : null;
+  const d = drag.value;
+  const hb = d
+    ? d.kind === 'tableBorder' || d.kind === 'ctBorder'
+      ? d.axis
+      : null
+    : !state.tool && !e.altKey && !onHandle
+      ? (tableBorderAt(p)?.axis ?? crosstabBorderAt(p)?.axis ?? null)
+      : null;
   if (hb !== borderHover.value) borderHover.value = hb;
   const bx = bandAt(p.y);
   if (!bx || p.y < bx.top) return;

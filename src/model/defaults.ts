@@ -1,6 +1,7 @@
 import type {
   Band,
   BandType,
+  CrosstabElement,
   DetailReportDef,
   ElementType,
   PageSettings,
@@ -313,8 +314,8 @@ export function createElement(tool: ToolId, bandId: string, x: number, y: number
       el = {
         ...base,
         type: 'crosstab',
-        width: 400,
-        height: 75,
+        width: 330, // = crosstabSize: 120 + 3 × 70, 3 × 22
+        height: 66,
         rowField: '',
         columnField: '',
         valueField: '',
@@ -466,6 +467,8 @@ export function normalizeReport(r: ReportDef): ReportDef {
   if (!r.bands.some((b) => b.type === 'detail')) r.bands.push(newBand('detail'));
   const bandIds = new Set(r.bands.map((b) => b.id));
   r.elements = r.elements.filter((e) => bandIds.has(e.bandId));
+  // a cross tab's box is exactly what the designer draws (older designs could have a bigger, empty box)
+  for (const e of r.elements) if (e.type === 'crosstab') syncCrosstabSize(e);
   r.baseStyle = { ...DEFAULT_BASE_STYLE, ...(r.baseStyle ?? {}) };
   r.watermark = { ...DEFAULT_WATERMARK, ...(r.watermark ?? {}) };
   r.styles ??= [];
@@ -479,6 +482,37 @@ export function normalizeReport(r: ReportDef): ReportDef {
   r.currency ??= 'USD';
   r.page.baseWidth ??= r.page.width;
   return r;
+}
+
+// ------------------------------------------------------------------ cross tab size
+/**
+ * What the designer draws for a cross tab: the row header + 2 sample data columns (+ the Total column) wide,
+ * the column header + 1 data row (+ the Grand Total row) high. Its box always has exactly this size.
+ */
+export function crosstabSize(el: CrosstabElement) {
+  const cols = 2 + (el.showRowTotals ? 1 : 0);
+  const rows = 2 + (el.showColumnTotals ? 1 : 0);
+  return { width: Math.round(el.rowHeaderWidth + el.cellWidth * cols), height: Math.round(el.rowHeight * rows), cols, rows };
+}
+/** box = drawing (after the row header width, cell width, row height or totals changed) */
+export function syncCrosstabSize(el: CrosstabElement) {
+  el.rowHeaderWidth = Math.max(20, Math.round(el.rowHeaderWidth || 120));
+  el.cellWidth = Math.max(20, Math.round(el.cellWidth || 70));
+  el.rowHeight = Math.max(12, Math.round(el.rowHeight || 22));
+  const s = crosstabSize(el);
+  el.width = s.width;
+  el.height = s.height;
+}
+/** Resizing a cross tab with its handles: the row header, the cells and the rows grow / shrink with the box. */
+export function scaleCrosstab(el: CrosstabElement, width: number, height: number) {
+  const s = crosstabSize(el);
+  const kx = width / s.width;
+  if (isFinite(kx) && kx > 0 && Math.abs(kx - 1) > 0.001) {
+    el.rowHeaderWidth = Math.max(20, Math.round(el.rowHeaderWidth * kx));
+    el.cellWidth = Math.max(20, Math.round(el.cellWidth * kx));
+  }
+  if (isFinite(height) && height > 0 && Math.abs(height - s.height) > 0.5) el.rowHeight = Math.max(12, Math.round(height / s.rows));
+  syncCrosstabSize(el);
 }
 
 // ------------------------------------------------------------------ page sizing

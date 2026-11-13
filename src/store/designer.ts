@@ -17,7 +17,9 @@ import {
   normalizeReport,
   orderedBands,
   resolveStyle,
+  scaleCrosstab,
   setCustomPageSize,
+  syncCrosstabSize,
   uid,
   type ToolId,
 } from '../model/defaults';
@@ -630,6 +632,8 @@ export function resizeElements(rects: { id: string; x: number; y: number; width:
       el.width = Math.max(2, Math.round(rc.width));
       el.height = Math.max(2, Math.round(rc.height));
       if (el.type === 'table') scaleTable(el, sx, sy);
+      // a cross tab grows / shrinks its row header, cells and rows with the box
+      else if (el.type === 'crosstab') scaleCrosstab(el, rc.width, rc.height);
       ensureBandFits(r, el.bandId);
     }
   });
@@ -660,6 +664,11 @@ export function nudge(dx: number, dy: number, resize = false) {
           el.rows[el.rows.length - 1].height = Math.max(8, el.rows[el.rows.length - 1].height + dy);
           el.width = el.columns.reduce((a, b) => a + b, 0);
           el.height = el.rows.reduce((a, b) => a + b.height, 0);
+        } else if (el.type === 'crosstab') {
+          // Shift+arrows: the cells get 1px wider / narrower, the rows 1px taller / shorter
+          el.cellWidth += Math.sign(dx);
+          el.rowHeight += Math.sign(dy);
+          syncCrosstabSize(el);
         }
       } else {
         el.x += dx;
@@ -707,7 +716,11 @@ export function setElementProp(path: string, value: unknown, ids?: string[]) {
           const tw = el.columns.reduce((a, b) => a + b, 0);
           const th = el.rows.reduce((a, b) => a + b.height, 0);
           scaleTable(el, el.width / tw, el.height / th);
-        }
+        } else if (el.type === 'crosstab') scaleCrosstab(el, el.width, el.height);
+        ensureBandFits(r, el.bandId);
+      } else if (el.type === 'crosstab' && ['rowHeaderWidth', 'cellWidth', 'rowHeight', 'showRowTotals', 'showColumnTotals'].includes(path)) {
+        // the box follows the cross tab's sizes and totals
+        syncCrosstabSize(el);
         ensureBandFits(r, el.bandId);
       }
       if (path === 'y') ensureBandFits(r, el.bandId);
