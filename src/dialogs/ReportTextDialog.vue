@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { Braces, Check, ClipboardCopy, ClipboardPaste, FileCode2, Globe } from 'lucide-vue-next';
 import Modal from '../components/Modal.vue';
-import { buildText, closeDialog, loadReport, notify, openDialog, parseReportText, SAVE_FORMATS, state, type SaveFormat } from '../store/designer';
+import { appUpdate, buildText, closeDialog, errorText, isStaleVersionError, loadReport, notify, openDialog, parseReportText, SAVE_FORMATS, state, type SaveFormat } from '../store/designer';
 
 /**
  * The report as text, for systems that store reports themselves:
@@ -53,7 +53,7 @@ async function build() {
     if (my !== job) return;
     text.value = '';
     extra.value = [];
-    error.value = (e as Error).message;
+    error.value = errorText(e);
   } finally {
     if (my === job) building.value = false;
   }
@@ -143,7 +143,7 @@ async function openText() {
     if (w.length) openDialog('saveInfo', { title: 'Imported RDL report', note: 'The RDL report was converted into a ReportTool design. Check these points:', files: [], warnings: w });
     else closeDialog();
   } catch (e) {
-    openError.value = 'This text is not a report: ' + (e as Error).message;
+    openError.value = (isStaleVersionError(e) ? '' : 'This text is not a report: ') + errorText(e);
   } finally {
     opening.value = false;
   }
@@ -171,7 +171,7 @@ async function openText() {
         <span>{{ building ? 'Building…' : error ? '' : `${formatLabel(format)} · ${size}` }}</span>
       </div>
       <textarea ref="out" class="rt-text" readonly spellcheck="false" :value="building ? '' : text" :placeholder="building ? 'Building the report text…' : ''" />
-      <div v-if="error" class="err" style="margin-top: 6px">Could not build the text: {{ error }}</div>
+      <div v-if="error" class="err" style="margin-top: 6px">{{ appUpdate.stale ? '' : 'Could not build the text: ' }}{{ error }}</div>
       <template v-if="extra.length && !building">
         <div class="section-title">Subreports ({{ extra.length }}) — only needed for SQL Server Reporting Services</div>
         <p class="hint" style="margin: 0 0 6px">ReportTool reopens the main text on its own. To publish to a Report Server, store these next to the main report under these names.</p>

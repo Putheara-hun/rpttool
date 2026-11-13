@@ -498,6 +498,11 @@ textarea {
   font-size: 12.5px;
   flex: none;
 }
+.update-bar {
+  background: #eff6ff;
+  border-bottom-color: #bfdbfe;
+  color: #1e3a8a;
+}
 .page-size-chip {
   background: #eef2ff;
   color: #3730a3;

@@ -1,20 +1,89 @@
 // Browser rasterization helpers (images, SVG -> canvas, colors).
 
 const imgCache = new Map<string, Promise<HTMLImageElement>>();
+function loadDirect(src: string, cors: boolean): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (cors) img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image failed to load: ' + src.slice(0, 80)));
+    img.src = src;
+  });
+}
+/**
+ * A picture that can be drawn into a canvas (PDF, PNG, Excel, Word …). A picture from a website that does not allow
+ * that (no CORS — e.g. Google's picture servers) is fetched by the ReportTool server instead.
+ */
 export function loadImage(src: string): Promise<HTMLImageElement> {
   let p = imgCache.get(src);
   if (!p) {
-    p = new Promise((resolve, reject) => {
-      const img = new Image();
-      if (/^https?:/i.test(src)) img.crossOrigin = 'anonymous';
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Image failed to load: ' + src.slice(0, 80)));
-      img.src = src;
+    const web = /^https?:/i.test(src);
+    p = loadDirect(src, web).catch(async (e) => {
+      const blob = web ? await imageViaServer(src) : null;
+      if (!blob) throw e;
+      return loadDirect(URL.createObjectURL(blob), false);
     });
     imgCache.set(src, p);
     p.catch(() => imgCache.delete(src));
   }
   return p;
+}
+
+/** a picture of another website, fetched by the ReportTool server (null where there is no such server) */
+export async function imageViaServer(url: string): Promise<Blob | null> {
+  try {
+    const r = await fetch('./api/image?url=' + encodeURIComponent(url), { headers: { 'x-reporttool': '1' } });
+    if (!r.ok) return null;
+    const b = await r.blob();
+    return b.type.startsWith('image/') ? b : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A picture from a web address as a data: URL, to keep inside the report (then it prints and exports everywhere,
+ * also when the website changes or is offline). Very large pictures are reduced to `maxSide` pixels.
+ * null when the picture cannot be read at all.
+ */
+export async function webImageToDataUrl(url: string, maxSide = 1600): Promise<string | null> {
+  let blob: Blob | null = null;
+  try {
+    const r = await fetch(url, { mode: 'cors' });
+    if (r.ok) {
+      const b = await r.blob();
+      if (b.type.startsWith('image/')) blob = b;
+    }
+  } catch {
+    /* the website does not allow it: ask the server */
+  }
+  blob ??= await imageViaServer(url);
+  if (!blob) return null;
+  const asDataUrl = (b: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const rd = new FileReader();
+      rd.onload = () => resolve(String(rd.result));
+      rd.onerror = () => reject(rd.error);
+      rd.readAsDataURL(b);
+    });
+  if (blob.type === 'image/svg+xml') return asDataUrl(blob); // drawings stay sharp
+  try {
+    const bmp = await createImageBitmap(blob);
+    const big = Math.max(bmp.width, bmp.height);
+    if (big <= maxSide && blob.size <= 1.5 * 1024 * 1024) {
+      bmp.close();
+      return asDataUrl(blob);
+    }
+    const k = Math.min(1, maxSide / big);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * k));
+    c.height = Math.max(1, Math.round(bmp.height * k));
+    c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close();
+    return blob.type === 'image/jpeg' ? c.toDataURL('image/jpeg', 0.9) : c.toDataURL('image/png');
+  } catch {
+    return asDataUrl(blob);
+  }
 }
 
 export async function svgToCanvas(svg: string, w: number, h: number, scale: number): Promise<HTMLCanvasElement> {

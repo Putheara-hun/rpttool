@@ -34,7 +34,16 @@ function serveStatic(req, res) {
     res.statusCode = 403;
     return res.end('Forbidden');
   }
-  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(ROOT, 'index.html');
+  const missing = !fs.existsSync(file) || fs.statSync(file).isDirectory();
+  // a missing file (e.g. a script of the previous version, asked for by a page opened before an update) is a plain
+  // 404 — never the start page: the browser cannot run HTML as a script, and /assets/* would be cached for a year
+  if (missing && (urlPath.startsWith('/assets/') || path.extname(urlPath))) {
+    res.statusCode = 404;
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('Not found: ' + urlPath);
+  }
+  if (missing) file = path.join(ROOT, 'index.html');
   if (!fs.existsSync(file)) {
     res.statusCode = 404;
     return res.end('Build the app first: npm run build');

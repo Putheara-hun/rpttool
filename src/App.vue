@@ -18,6 +18,7 @@ import {
   FolderOpen,
   Globe,
   History,
+  RefreshCw,
   ListTree,
   PencilRuler,
   Redo2,
@@ -40,9 +41,13 @@ import SiteLoginDialog from './dialogs/SiteLoginDialog.vue';
 import ReconnectDialog from './dialogs/ReconnectDialog.vue';
 import ContextMenu from './components/ContextMenu.vue';
 import {
+  appUpdate,
   clearSelection,
   deleteSelection,
   discardPreviousSession,
+  notify,
+  reloadKeepingWork,
+  takeReloadRestore,
   duplicateSelection,
   history,
   newReportCmd,
@@ -184,7 +189,7 @@ function onKey(e: KeyboardEvent) {
 }
 
 function onBeforeUnload(e: BeforeUnloadEvent) {
-  if (state.dirty && !embed.active) e.preventDefault();
+  if (state.dirty && !embed.active && !appUpdate.reloading) e.preventDefault();
 }
 
 // Google fonts used by the report are downloaded when the report opens or a control starts using one
@@ -202,6 +207,11 @@ onMounted(() => {
   // always start with a blank page; offer to bring back unsaved work from the last session
   // (not when embedded: the host system loads its report)
   previous.value = embed.active ? null : stashPreviousSession();
+  // reloaded for a new version ("Reload now"): the report comes straight back
+  if (takeReloadRestore() && previous.value && !embed.active) {
+    restorePrevious();
+    notify('ReportTool is up to date — your report is back', 'success');
+  }
 });
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey);
@@ -244,6 +254,11 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div v-if="appUpdate.stale" class="restore-bar update-bar">
+      <RefreshCw :size="15" />
+      <span><b>ReportTool was updated</b> on the server while this page was open. Reload to use the new version — your report is kept.</span>
+      <button class="btn small primary" @click="reloadKeepingWork">Reload now</button>
+    </div>
     <Ribbon v-if="state.mode === 'design'" />
     <div v-if="previous && state.mode === 'design'" class="restore-bar">
       <History :size="15" />

@@ -122,6 +122,8 @@ export const dataErrors = reactive<Record<string, string>>({});
 // ------------------------------------------------------------------ notifications
 let toastId = 1;
 export function notify(text: string, kind: Toast['kind'] = 'info') {
+  // "Failed to fetch dynamically imported module …": the server has a newer version — say so in plain words
+  if (isStaleVersionError(text)) text = errorText(text);
   const t = { id: toastId++, text, kind };
   state.toasts.push(t);
   setTimeout(() => {
@@ -2088,20 +2090,67 @@ export function editExpression(value: string, title = 'Expression Editor'): Prom
 
 // ------------------------------------------------------------------ autosave
 let saveTimer: number | undefined;
+function writeAutosave() {
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ fileName: state.fileName, report: toRaw(state.report) }));
+  } catch {
+    /* storage full or unavailable */
+  }
+}
 watch(
   () => state.revision,
   () => {
     clearTimeout(saveTimer);
     if (state.embedded) return; // the host system keeps the reports
-    saveTimer = window.setTimeout(() => {
-      try {
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ fileName: state.fileName, report: toRaw(state.report) }));
-      } catch {
-        /* storage full or unavailable */
-      }
-    }, 800);
+    saveTimer = window.setTimeout(writeAutosave, 800);
   },
 );
+
+// ------------------------------------------------------------------ a newer version on the server
+/**
+ * The server was updated while this page was open: the scripts of the old version that the page loads on demand
+ * (Copy Text, export, …) are gone. Browsers word it differently; all mean "reload the page".
+ */
+const STALE_VERSION = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS|Loading (CSS )?chunk .* failed/i;
+export const isStaleVersionError = (e: unknown) => STALE_VERSION.test(e instanceof Error ? e.message : String(e ?? ''));
+/** stale: the server has a newer version; reloading: reloadKeepingWork is under way (no "leave the page?" question) */
+export const appUpdate = reactive({ stale: false, reloading: false });
+const RELOAD_RESTORE_KEY = 'reporttool.reloadRestore';
+/** the message for such an error (anything else stays as it is) */
+export function errorText(e: unknown): string {
+  if (isStaleVersionError(e)) {
+    appUpdate.stale = true;
+    return 'ReportTool was updated on the server while this page was open. Click "Reload now" at the top — your report is kept.';
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+/** Save the report in this browser right now, load the new version, and bring the report back by itself. */
+export function reloadKeepingWork() {
+  appUpdate.reloading = true;
+  clearTimeout(saveTimer);
+  if (!state.embedded) writeAutosave();
+  try {
+    sessionStorage.setItem(RELOAD_RESTORE_KEY, '1');
+  } catch {
+    /* without it the "Restore it" bar offers the report */
+  }
+  location.reload();
+}
+/** at start-up: true once after reloadKeepingWork (the report is then restored without asking) */
+export function takeReloadRestore(): boolean {
+  try {
+    const v = sessionStorage.getItem(RELOAD_RESTORE_KEY);
+    sessionStorage.removeItem(RELOAD_RESTORE_KEY);
+    return v === '1';
+  } catch {
+    return false;
+  }
+}
+if (typeof window !== 'undefined') {
+  // Vite reports a failed on-demand script; other failures arrive as unhandled promise rejections
+  window.addEventListener('vite:preloadError', () => (appUpdate.stale = true));
+  window.addEventListener('unhandledrejection', (e) => isStaleVersionError(e.reason) && (appUpdate.stale = true));
+}
 /**
  * Called once at start-up. The designer always opens on a blank page; the auto-saved report of the
  * previous session (if it has any content) is parked under a separate key and can be restored on demand.

@@ -1,7 +1,9 @@
 // HTTP API for database access. Mounted as connect-style middleware (Vite dev server) or by server/index.mjs.
 import { ApiError } from './common.mjs';
 import { AUTH_ENABLED, login, logout, PUBLIC, signedIn, visitorOf } from './auth.mjs';
-import { assertPublicTarget, countAttempt } from './netguard.mjs';
+import { assertPublicTarget, countAttempt, isPrivateAddress } from './netguard.mjs';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { deleteConnection, getConnection, listConnections, needsPassword, PERSIST, publicConn, saveConnection, setPassword, validate } from './store.mjs';
 
 const DRIVERS = {
@@ -147,11 +149,70 @@ async function route(method, url, body, owner, req) {
   throw new ApiError('Not found: ' + method + ' ' + path, 404);
 }
 
+// ------------------------------------------------------------------ pictures from other websites
+// Many websites let a browser show their pictures but not read them (no CORS), so PDF / Excel / Word / PNG exports
+// could not include them. The designer asks this server instead: GET /api/image?url=https://… returns the picture.
+// Only for ReportTool's own pages (x-reporttool header), only pictures, at most 8 MB; when the server is on the
+// internet (not localhost) it never fetches from localhost / private networks.
+const IMAGE_MAX = 8 * 1024 * 1024;
+async function publicHost(hostname) {
+  const h = hostname.replace(/^\[|\]$/g, '');
+  const addrs = net.isIP(h) ? [h] : (await dns.lookup(h, { all: true }).catch(() => [])).map((a) => a.address);
+  return addrs.length > 0 && !addrs.some(isPrivateAddress);
+}
+async function imageProxy(req, res) {
+  if (req.method !== 'GET' || req.headers['x-reporttool'] !== '1' || !hostAllowed(req.headers.host ?? '')) return send(res, 403, { error: 'Forbidden' });
+  if (!signedIn(req)) return send(res, 401, { error: 'Sign in first.', authRequired: true });
+  const local = LOCAL_HOSTS.test(req.headers.host ?? '');
+  let target;
+  try {
+    target = new URL(new URL(req.url, 'http://x').searchParams.get('url') ?? '');
+  } catch {
+    return send(res, 400, { error: 'Not a web address.' });
+  }
+  try {
+    // follow at most 3 redirects, checking every address on the way
+    let r;
+    for (let hop = 0; ; hop++) {
+      if (!/^https?:$/.test(target.protocol)) return send(res, 400, { error: 'Only http(s) web addresses.' });
+      if (!local && !(await publicHost(target.hostname))) return send(res, 400, { error: 'Only pictures from public websites.' });
+      r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(15000), headers: { accept: 'image/*,*/*;q=0.5', 'user-agent': 'Mozilla/5.0 (ReportTool picture loader)' } });
+      if (r.status >= 300 && r.status < 400 && r.headers.get('location') && hop < 3) {
+        target = new URL(r.headers.get('location'), target);
+        continue;
+      }
+      break;
+    }
+    const type = (r.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (!r.ok) return send(res, 502, { error: `The website answered ${r.status}.` });
+    if (!type.startsWith('image/')) return send(res, 415, { error: 'That address is not a picture.' });
+    if (Number(r.headers.get('content-length') ?? 0) > IMAGE_MAX) return send(res, 413, { error: 'The picture is larger than 8 MB.' });
+    const chunks = [];
+    let size = 0;
+    for await (const c of r.body) {
+      size += c.length;
+      if (size > IMAGE_MAX) return send(res, 413, { error: 'The picture is larger than 8 MB.' });
+      chunks.push(c);
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', type);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // never runs as a page of this site (an SVG picture can hold scripts)
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+    return res.end(Buffer.concat(chunks));
+  } catch (e) {
+    return send(res, 502, { error: 'The picture could not be loaded: ' + (e?.name === 'TimeoutError' ? 'the website did not answer in time.' : e?.message ?? e) });
+  }
+}
+
 /** Connect/Express-style middleware. */
 export function createApiHandler() {
   return async (req, res, next) => {
     const url = req.url ?? '';
     if (!url.startsWith('/api/')) return next ? next() : send(res, 404, { error: 'Not found' });
+    // pictures from other websites: also on design-only servers (no database access)
+    if (url.split('?')[0] === '/api/image') return imageProxy(req, res);
     // design-only deployment (the host systems send the data): no database access at all
     if (process.env.REPORTTOOL_DISABLE_DB) return send(res, 404, { error: 'Database access is turned off on this server.', noService: true });
     // Only answer requests made by the ReportTool UI itself:

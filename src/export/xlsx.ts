@@ -1,6 +1,6 @@
 // Excel (XLSX) and CSV export. Text boxes of the rendered document are mapped to a grid (WYSIWYG mode).
 import { strToU8, zipSync } from 'fflate';
-import type { CellInfo, RenderedDoc } from '../engine/doc';
+import type { CellInfo, PImage, PSvg, RenderedDoc } from '../engine/doc';
 import { isDate } from '../engine/format';
 import { escXml } from './svg';
 import { lookOf, makeGrid, pageDecor, type Edge, type GridCell as Box, type Placed } from './pagegrid';
@@ -212,6 +212,9 @@ export async function exportXlsx(doc: RenderedDoc, sheetName = 'Report', opts: X
   // ---- boxes of all pages, one after another
   const items: Placed[] = [];
   const pageTop: number[] = [];
+  // pictures and charts in the sheet: not in the page footer, not the page header again, not the same one twice
+  const pictures: { q: PImage | PSvg; page: number; gy: number }[] = [];
+  const seen = new Set<string>();
   let offset = 0;
   doc.pages.forEach((p, pi) => {
     pageTop[pi] = offset;
@@ -221,6 +224,18 @@ export async function exportXlsx(doc: RenderedDoc, sheetName = 'Report', opts: X
       const d = deco.get(c)!;
       if (c.text === '' && !d.fill && !d.t && !d.b && !d.l && !d.r) continue;
       items.push({ c, page: pi, top: offset + c.y, deco: d });
+    }
+    const footerTop = Math.min(...p.cells.filter((c) => c.band === 'pageFooter').map((c) => c.y), Infinity);
+    const headerBottom = pi > 0 ? Math.max(...p.cells.filter((c) => c.band === 'pageHeader').map((c) => c.y + c.h), -Infinity) : -Infinity;
+    for (const q of p.prims) {
+      if (q.k !== 'image' && q.k !== 'svg') continue;
+      const key = (q.k === 'image' ? q.src.slice(0, 200) + q.src.length : q.svg.length + q.svg.slice(0, 200)) + `|${Math.round(q.x)}|${Math.round(q.y)}|${Math.round(q.w)}|${Math.round(q.h)}`;
+      const again = seen.has(key);
+      seen.add(key);
+      if (again || q.y >= footerTop - 0.5 || q.y + q.h <= headerBottom + 0.5) continue;
+      pictures.push({ q, page: pi, gy: offset + q.y });
+      // the picture takes room in the grid (rows / columns at its edges), also where there is no text around it
+      items.push({ c: { x: q.x, y: q.y, w: q.w, h: q.h, text: '', value: '', band: '' }, page: pi, top: offset + q.y, deco: {}, ghost: true });
     }
     offset += p.height;
   });
@@ -311,27 +326,15 @@ export async function exportXlsx(doc: RenderedDoc, sheetName = 'Report', opts: X
 
   // ---- pictures and charts, where they are on the page
   const pics: { col: number; colOff: number; row: number; rowOff: number; w: number; h: number; png: Uint8Array }[] = [];
-  const seen = new Set<string>();
-  for (let pi = 0; pi < doc.pages.length; pi++) {
-    const p = doc.pages[pi];
-    const rows = grid.rows.map((r, i) => ({ ...r, i })).filter((r) => r.page === pi);
-    for (const q of p.prims) {
-      if (q.k !== 'image' && q.k !== 'svg') continue;
-      const key = (q.k === 'image' ? q.src.slice(0, 200) + q.src.length : q.svg.length + q.svg.slice(0, 200)) + `|${Math.round(q.x)}|${Math.round(q.y)}|${Math.round(q.w)}|${Math.round(q.h)}`;
-      const repeated = seen.has(key);
-      seen.add(key);
-      if (repeated || !rows.length) continue; // the same picture in the page header of every page: once
-      const gy = pageTop[pi] + q.y;
-      const last = rows[rows.length - 1];
-      if (gy > last.top + last.height + 1) continue; // page footer
-      if (pi > 0 && gy + q.h < rows[0].top - 1) continue; // page header of the next pages
-      let row = rows[0];
-      for (const r of rows) if (r.top <= gy + 0.5) row = r;
-      let col = 0;
-      grid.xs.forEach((x, i) => x <= q.x + 0.5 && (col = i));
-      const png = await picturePng(q);
-      if (png) pics.push({ col, colOff: Math.max(0, q.x - (grid.xs[col] ?? 0)), row: row.i, rowOff: Math.max(0, gy - row.top), w: q.w, h: q.h, png });
-    }
+  for (const { q, page, gy } of pictures) {
+    const rows = grid.rows.map((r, i) => ({ ...r, i })).filter((r) => r.page === page);
+    if (!rows.length) continue;
+    let row = rows[0];
+    for (const r of rows) if (r.top <= gy + 0.5) row = r;
+    let col = 0;
+    grid.xs.forEach((x, i) => x <= q.x + 0.5 && (col = i));
+    const png = await picturePng(q);
+    if (png) pics.push({ col, colOff: Math.max(0, q.x - (grid.xs[col] ?? 0)), row: row.i, rowOff: Math.max(0, gy - row.top), w: q.w, h: q.h, png });
   }
 
   // ---- printing: the report's paper, margins and orientation, fit to the page width

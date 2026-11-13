@@ -28,8 +28,11 @@ import {
   canUnmergeCells,
   mergeCells,
   unmergeCells,
+  findElement,
+  notify,
 } from '../store/designer';
 import { PAPER_SIZES, pxToMm } from '../model/defaults';
+import { webImageToDataUrl } from '../export/raster';
 
 const canMerge = computed(() => canMergeCells());
 const canUnmerge = computed(() => canUnmergeCells());
@@ -233,6 +236,31 @@ function borderOn(d: PropDef, side: string) {
   const s = (v === MIXED ? '' : v ?? inherited(d) ?? '') as string;
   return s.includes(side);
 }
+/**
+ * A web address in "Image": the picture shows at once, then it is downloaded and kept inside the report (like Upload),
+ * so it also prints and exports (PDF, Excel, Word, PNG) — many websites let a browser show a picture but not copy it.
+ */
+async function setImage(d: PropDef, raw: string) {
+  const v = raw.trim();
+  if (v === '(embedded image)') return;
+  setVal(d, v);
+  if (!/^https?:\/\//i.test(v)) return;
+  const t = target.value;
+  const ids = t.kind === 'elements' ? t.els.map((e) => e.id) : null;
+  const data = await webImageToDataUrl(v);
+  if (!data) {
+    notify('The picture shows here, but that website does not let ReportTool download it, so PDF, Excel, Word and image exports would leave it out. Save the picture to your computer and use the Upload button next to the address.', 'error');
+    return;
+  }
+  // only where the address is still the one typed (the user may have moved on)
+  if (ids) {
+    const still = ids.filter((id) => getPath(findElement(id) ?? {}, d.path) === v);
+    if (!still.length) return;
+    setElementProp(d.path, data, still);
+  } else if (getVal(d) === v) setVal(d, data);
+  else return;
+  notify('Picture saved into the report — it prints and exports everywhere now', 'success');
+}
 function pickImage(d: PropDef) {
   const inp = document.createElement('input');
   inp.type = 'file';
@@ -339,7 +367,7 @@ const dataSources = computed(() => state.report.dataSources);
             </template>
             <template v-else-if="d.editor === 'image'">
               <img v-if="getVal(d) && getVal(d) !== MIXED" :src="getVal(d)" style="width: 24px; height: 24px; object-fit: contain; border: 1px solid var(--border)" />
-              <input type="text" placeholder="URL or upload" :value="String(getVal(d) ?? '').startsWith('data:') ? '(embedded image)' : display(d)" @change="setVal(d, ($event.target as HTMLInputElement).value)" />
+              <input type="text" placeholder="URL or upload" :value="String(getVal(d) ?? '').startsWith('data:') ? '(embedded image)' : display(d)" @change="setImage(d, ($event.target as HTMLInputElement).value)" />
               <button class="icon-btn" title="Upload image" @click="pickImage(d)"><Upload :size="14" /></button>
             </template>
             <template v-else-if="d.editor === 'styleName'">

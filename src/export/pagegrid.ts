@@ -141,6 +141,8 @@ export interface Placed {
   page: number;
   top: number;
   deco: Deco;
+  /** only takes room (rows / columns) — a picture placed over the grid, not a cell */
+  ghost?: boolean;
 }
 export interface GridCell extends Placed {
   row: number;
@@ -226,6 +228,7 @@ export function makeGrid(items: Placed[], minGap = 6): Grid {
   const cells: GridCell[] = [];
   const sorted = [...items].sort((a, b) => a.top - b.top || a.c.x - b.c.x);
   for (const it of sorted) {
+    if (it.ghost) continue;
     const row = rowAt[anchorOf(tops, it.top)];
     const col = anchorOf(xs, it.c.x);
     const key = row + ',' + col;

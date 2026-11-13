@@ -5,7 +5,7 @@ import { paramValues, renderReport } from '../engine/renderer';
 import { ensureReportFonts } from '../engine/fonts';
 import { pageToSvg } from '../export/svg';
 import type { Row } from '../model/types';
-import { dataErrors, ensureData, rowsFor, state } from '../store/designer';
+import { dataErrors, ensureData, isStaleVersionError, rowsFor, state } from '../store/designer';
 import { labels, prefs, setLayout } from './labels';
 const emit = defineEmits<{ rendered: [pages: number]; failed: [message: string]; refresh: [] }>();
 const L = labels;
@@ -288,7 +288,7 @@ async function copyImage(pi: number) {
       note(L.rpt_image_saved, 3500);
     } catch (e) {
       note('');
-      error.value = (e as Error).message;
+      error.value = viewerError(e);
     }
   }
 }
@@ -321,10 +321,10 @@ const onDocPointer = (e: MouseEvent) => {
 async function exportAs(kind: 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png') {
   exportOpen.value = false;
   if (!doc.value) return;
-  const ex = await import('../export');
-  const base = ex.safeFileName(state.report.name);
   busy.value = true;
   try {
+    const ex = await import('../export');
+    const base = ex.safeFileName(state.report.name);
     await new Promise((r) => setTimeout(r, 10));
     if (kind === 'pdf') ex.downloadBlob(await ex.exportPdf(doc.value, state.report.name), base + '.pdf');
     else if (kind === 'xlsx') ex.downloadBlob(await ex.exportXlsx(doc.value, state.report.name, { margins: state.report.page.margins }), base + '.xlsx');
@@ -336,14 +336,22 @@ async function exportAs(kind: 'pdf' | 'xlsx' | 'docx' | 'csv' | 'html' | 'png') 
       ex.downloadBlob(r.blob, r.name);
     }
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = viewerError(e);
   } finally {
     busy.value = false;
   }
 }
+/** an error in plain words: "Failed to fetch dynamically imported module" = the site was updated while open */
+function viewerError(e: unknown) {
+  return isStaleVersionError(e) ? 'The Report Viewer was updated on the server while this page was open. Reload the page (F5) to export, print or copy.' : (e as Error).message;
+}
 async function print() {
   if (!doc.value) return;
-  (await import('../export')).printDoc(doc.value, state.report.name);
+  try {
+    (await import('../export')).printDoc(doc.value, state.report.name);
+  } catch (e) {
+    error.value = viewerError(e);
+  }
 }
 
 // arrow keys / Page Up / Page Down turn pages (not while typing); Esc closes the copy menu
