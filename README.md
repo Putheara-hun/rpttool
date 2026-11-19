@@ -221,10 +221,19 @@ Report ▸ **Data Sources** ▸ **Add data source** ▸ **Database**:
    enter server, port, database (Oracle: service name), user and password, then **Test connection** and **Save**.
 2. Browse the database: **Tables**, **Views**, **Stored Procedures**, **Functions** (with search), or pick
    **Custom SQL query** and write your own SQL.
-3. Procedure / function parameters are listed automatically. In a custom query write parameters as `@Name` or
-   `:Name` and click **Detect parameters**. Each parameter value is an expression (`'USA'`, `10`, `Today()`), or
-   click **Report parameter** to bind it to a report parameter (`?Name`) that the preview asks for.
-4. **Preview data** runs it and detects the fields; drag the fields from the Field List onto the report.
+3. Picking a table, view, procedure or function loads its **fields at once**, read from the database's description
+   of it — nothing runs (SQL Server: `sys.dm_exec_describe_first_result_set`; a procedure SQL Server cannot describe,
+   e.g. one using temp tables, runs once inside a transaction that is rolled back, only up to its first result set).
+   The data source is named after it.
+4. Procedure / function parameters are listed automatically, and each input parameter **becomes a report parameter**
+   (same name and type, linked as `?Name`) that the preview asks for. In a custom query write parameters as `@Name` or
+   `:Name` and click **Detect parameters**. A parameter value can also be an expression (`'USA'`, `10`, `Today()`).
+5. **Preview data** runs it with the parameter values; drag the fields from the Field List onto the report.
+
+**Stored procedure** (Add data source ▸ Stored procedure, or the procedure button next to + in the Field List's Data
+Sources): opens on the list of procedures (chips: All / Tables / Views / Procedures / Functions) of the connection used
+last, so one click on a procedure gives the report its fields and parameters. **Detect** (Fields) reads the
+definition again without running anything.
 
 Details:
 - Database access goes through a small Node service in `server/` (runs inside `npm run dev` / `npm start`).

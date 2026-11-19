@@ -80,6 +80,52 @@ async function pool(c) {
 
 const colType = (col) => fieldType(col?.type?.declaration ?? col?.type?.name ?? '');
 
+/** report parameter type -> a SQL type for sp_describe_first_result_set's @params */
+const DECL = { number: 'decimal(38, 10)', date: 'datetime2', boolean: 'bit', string: 'nvarchar(4000)' };
+
+/** rows of sys.dm_exec_describe_first_result_set(_for_object) -> columns, or the reason it could not describe */
+function describedColumns(rows) {
+  const err = rows.find((x) => x.error_message);
+  if (err) return { columns: [], note: String(err.error_message) };
+  const columns = rows
+    .filter((x) => !x.is_hidden && x.column_ordinal != null)
+    .sort((a, b) => a.column_ordinal - b.column_ordinal)
+    .map((x) => ({ name: x.name ?? '', type: fieldType(x.system_type_name), dbType: x.system_type_name }));
+  return { columns };
+}
+
+/**
+ * Last resort for procedures SQL Server cannot describe without running them (temp tables, dynamic SQL):
+ * run it inside a transaction that is always rolled back, take the first result set's columns and cancel the rest.
+ */
+async function columnsByRunning(sql, p, obj, src, values) {
+  const tx = new sql.Transaction(p);
+  await tx.begin();
+  try {
+    const req = new sql.Request(tx);
+    req.stream = true;
+    for (const prm of src.params ?? []) {
+      if (prm.mode === 'OUT' || prm.mode === 'INOUT') req.output(prm.name, sql.NVarChar(sql.MAX), prm.mode === 'INOUT' ? bindValue(values[prm.name]) : undefined);
+      else req.input(prm.name, bindValue(values[prm.name]));
+    }
+    return await new Promise((resolve, reject) => {
+      let got = null;
+      req.on('recordset', (columns) => {
+        if (got) return;
+        const list = Object.values(columns ?? {}).sort((a, b) => a.index - b.index);
+        if (!list.length) return;
+        got = list.map((col) => ({ name: col.name, type: colType(col), dbType: col.type?.declaration }));
+        req.cancel();
+      });
+      req.on('error', (e) => (got ? resolve(got) : reject(e)));
+      req.on('done', () => resolve(got ?? []));
+      req.execute(obj);
+    });
+  } finally {
+    await tx.rollback().catch(() => {});
+  }
+}
+
 function pickRecordset(result) {
   const sets = result.recordsets ?? [];
   const metas = result.columns ?? [];
@@ -124,6 +170,56 @@ export default {
         .filter((x) => x.r !== 'YES' && x.n)
         .map((x) => ({ name: String(x.n).replace(/^@/, ''), dbType: x.t, type: fieldType(x.t) ?? 'string', mode: x.m === 'INOUT' ? 'INOUT' : x.m === 'OUT' ? 'OUT' : 'IN' })),
     };
+  },
+  /**
+   * The columns a source returns, read from its definition without running it (no rows):
+   * tables / views (TOP 0), table functions (ROUTINE_COLUMNS), procedures and queries (SQL Server's
+   * describe-first-result-set). A procedure it cannot describe is run in a rolled-back transaction.
+   */
+  async describe(c, src, values) {
+    const sql = await load();
+    const p = await pool(c);
+    const obj = qualified('mssql', src.schema, src.name);
+    switch (src.mode) {
+      case 'table':
+      case 'view': {
+        const r = await p.request().query(`SELECT TOP (0) * FROM ${obj}`);
+        const cols = Object.values(r.recordset?.columns ?? {}).sort((a, b) => a.index - b.index);
+        return { columns: cols.map((col) => ({ name: col.name, type: colType(col), dbType: col.type?.declaration })), how: 'definition' };
+      }
+      case 'function': {
+        if (!src.returnsTable) return { columns: [{ name: 'Value', type: fieldType(src.returnType), dbType: src.returnType }], how: 'definition' };
+        const r = await p
+          .request()
+          .input('s', sql.NVarChar, src.schema)
+          .input('n', sql.NVarChar, src.name)
+          .query('SELECT COLUMN_NAME AS n, DATA_TYPE AS t FROM INFORMATION_SCHEMA.ROUTINE_COLUMNS WHERE TABLE_SCHEMA = @s AND TABLE_NAME = @n ORDER BY ORDINAL_POSITION');
+        return { columns: r.recordset.map((x) => ({ name: x.n, type: fieldType(x.t), dbType: x.t })), how: 'definition' };
+      }
+      case 'procedure': {
+        const r = await p
+          .request()
+          .input('o', sql.NVarChar, obj)
+          .query('SELECT name, system_type_name, column_ordinal, is_hidden, error_message FROM sys.dm_exec_describe_first_result_set_for_object(OBJECT_ID(@o), 0)');
+        const d = describedColumns(r.recordset);
+        if (d.columns.length || !d.note) return { ...d, how: 'definition' };
+        return { columns: await columnsByRunning(sql, p, obj, src, values), how: 'run', note: d.note };
+      }
+      case 'query': {
+        const list = src.params ?? [];
+        const t = translateParams(src.query, list.map((x) => x.name), 'mssql');
+        const typeOf = (n) => list.find((x) => x.name === n)?.type ?? values[n]?.type ?? 'string';
+        const decl = t.order.map((n) => `@${n} ${DECL[typeOf(n)] ?? DECL.string}`).join(', ');
+        const r = await p
+          .request()
+          .input('q', sql.NVarChar(sql.MAX), t.sql)
+          .input('d', sql.NVarChar(sql.MAX), decl || null)
+          .query('SELECT name, system_type_name, column_ordinal, is_hidden, error_message FROM sys.dm_exec_describe_first_result_set(@q, @d, 0)');
+        return { ...describedColumns(r.recordset), how: 'definition' };
+      }
+      default:
+        throw new ApiError('Unknown source mode ' + src.mode);
+    }
   },
   async execute(c, src, values, maxRows) {
     const sql = await load();

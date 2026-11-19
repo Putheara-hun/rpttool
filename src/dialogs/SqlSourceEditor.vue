@@ -43,9 +43,27 @@ import {
 } from '../data/dbApi';
 import { mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
 
-const props = defineProps<{ source: SqlSource }>();
-const emit = defineEmits<{ preview: []; switchKind: [kind: 'json' | 'csv'] }>();
+const props = defineProps<{ source: SqlSource; focus?: 'procedures' }>();
+/** chosen: a table / view / procedure / function was picked (parameters loaded and linked) — the dialog reads its fields */
+const emit = defineEmits<{ preview: []; chosen: [hasInputs: boolean]; switchKind: [kind: 'json' | 'csv'] }>();
 const src = props.source;
+
+/** the connection used last, so a new database source opens on its list right away (a per-browser convenience) */
+const LAST_CONN = 'reporttool.lastConnection';
+const rememberConn = (id: string) => {
+  try {
+    localStorage.setItem(LAST_CONN, id);
+  } catch {
+    /* storage blocked: nothing to remember */
+  }
+};
+const lastConn = () => {
+  try {
+    return localStorage.getItem(LAST_CONN) ?? '';
+  } catch {
+    return '';
+  }
+};
 
 const connections = ref<DbConnection[]>([]);
 const schema = ref<DbSchema | null>(null);
@@ -132,6 +150,7 @@ async function loadSchema() {
 function pickConnection(id: string) {
   src.connectionId = id;
   src.connectionName = connections.value.find((c) => c.id === id)?.name;
+  if (id) rememberConn(id);
   void loadSchema();
 }
 async function onSaved(c: DbConnection) {
@@ -162,6 +181,10 @@ const KINDS: { key: Kind; label: string; mode: SqlMode; icon: any }[] = [
   { key: 'procedures', label: 'Stored Procedures', mode: 'procedure', icon: Workflow },
   { key: 'functions', label: 'Functions', mode: 'function', icon: SquareFunction },
 ];
+/** which kinds of objects the list shows: everything, or only one kind (Stored procedure opens on procedures) */
+const only = ref<'all' | Kind>(props.focus ?? 'all');
+const shownKinds = computed(() => KINDS.filter((k) => only.value === 'all' || k.key === only.value));
+const LIST_CAP = 1000;
 const fullName = (o: DbObject) => [o.schema, o.pkg, o.name].filter(Boolean).join('.');
 const filtered = (k: Kind) => {
   const q = search.value.trim().toLowerCase();
@@ -195,7 +218,44 @@ async function choose(k: Kind, o: DbObject) {
       return;
     }
   }
-  if (!src.params.some((p) => p.mode !== 'OUT' && !p.value)) emit('preview');
+  autoLinkParams();
+  emit('chosen', src.params.some((p) => p.mode !== 'OUT'));
+}
+
+/** report parameters this editor created for a routine (removed again when another routine is picked and nothing uses them) */
+const createdHere = new Set<string>();
+/** "FROM_DATE" -> "From Date", "branchId" -> "Branch Id" */
+const prettyLabel = (n: string) =>
+  n
+    .replace(/^@/, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+/** A report parameter for each input parameter that has no value yet, linked as ?Name: the preview asks for them. */
+function autoLinkParams() {
+  const made: string[] = [];
+  for (const p of src.params) {
+    if (p.mode === 'OUT' || p.value?.trim()) continue;
+    const name = linkReportParam(p, true);
+    if (name) made.push(name);
+  }
+  const linked = new Set(src.params.map((p) => /^\?(\w+)$/.exec(p.value?.trim() ?? '')?.[1]?.toLowerCase()).filter(Boolean));
+  // created for the routine picked before, and not used by this routine or anything else in the report
+  const stale = [...createdHere].filter((n) => !linked.has(n.toLowerCase()) && !usedInReport(n));
+  if (stale.length) {
+    mutate((r) => {
+      r.parameters = r.parameters.filter((x) => !stale.includes(x.name));
+    });
+    stale.forEach((n) => createdHere.delete(n));
+  }
+  if (made.length) notify(`Report parameter${made.length > 1 ? 's' : ''} ${made.join(', ')} added — the preview asks for ${made.length > 1 ? 'their values' : 'its value'}`);
+}
+/** ?Name used anywhere in the saved report other than its parameter list */
+function usedInReport(name: string) {
+  const { parameters: _p, ...rest } = state.report;
+  return new RegExp('\\?' + name.replace(/\W/g, '\\$&') + '\\b', 'i').test(JSON.stringify(rest));
 }
 
 function chooseQuery() {
@@ -216,25 +276,39 @@ function detectParams() {
   });
   notify(names.length ? `Found ${names.length} parameter(s): ${names.join(', ')}` : 'No @name or :name parameters found in the query');
 }
-function linkReportParam(p: SqlParam) {
+/** Bind p to a report parameter of the same name, creating it when missing. Returns the name when it was created. */
+function linkReportParam(p: SqlParam, quiet = false): string | null {
   let rp = reportParamFor(p.name);
+  let created: string | null = null;
   if (!rp) {
     const name = p.name.replace(/\W/g, '_').replace(/^(\d)/, '_$1');
     mutate((r) => {
-      r.parameters.push({ id: uid('p'), name, label: p.name, type: p.type, defaultValue: '', values: '', visible: true });
+      r.parameters.push({ id: uid('p'), name, label: prettyLabel(p.name), type: p.type, defaultValue: '', values: '', visible: true });
     });
     rp = reportParamFor(name);
-    notify(`Report parameter "${name}" created — the preview will ask for its value`);
+    created = name;
+    createdHere.add(name);
+    if (!quiet) notify(`Report parameter "${name}" created — the preview will ask for its value`);
   }
   p.value = `?${rp!.name}`;
+  return created;
 }
 
+const searchBox = ref<HTMLInputElement>();
 onMounted(async () => {
   const loaded = await loadConnections();
   void refreshAuth();
   if (loaded && src.connectionId) {
     if (!current.value) error.value = `The connection "${src.connectionName ?? src.connectionId}" is not defined on this computer. Choose or create a connection.`;
     else await loadSchema();
+  } else if (loaded && !src.name && !src.query) {
+    // a new database source: open on the connection used last (or the only one), so its list shows at once
+    const id = lastConn();
+    const pick = connections.value.find((c) => c.id === id) ?? (connections.value.length === 1 ? connections.value[0] : null);
+    if (pick?.id) {
+      pickConnection(pick.id);
+      if (props.focus) searchBox.value?.focus();
+    }
   }
 });
 </script>
@@ -286,13 +360,23 @@ onMounted(async () => {
 
     <div class="split" style="height: 290px">
       <div class="col" style="width: 300px; min-width: 300px">
-        <div class="row" style="gap: 4px"><Search :size="14" class="muted" /><input v-model="search" placeholder="Search tables, views, procedures…" style="flex: 1" /></div>
+        <div class="row" style="gap: 4px">
+          <Search :size="14" class="muted" />
+          <input ref="searchBox" v-model="search" :placeholder="only === 'procedures' ? 'Search stored procedures…' : 'Search tables, views, procedures…'" style="flex: 1" />
+        </div>
+        <div class="kind-chips">
+          <button class="kind-chip" :class="{ on: only === 'all' }" @click="only = 'all'">All</button>
+          <button v-for="k in KINDS" :key="k.key" class="kind-chip" :class="{ on: only === k.key }" :title="k.label" @click="only = k.key">
+            {{ k.key === 'procedures' ? 'Procedures' : k.label }}<span v-if="schema" class="kind-n">{{ filtered(k.key).length }}</span>
+          </button>
+        </div>
         <div class="list-box tree" style="flex: 1">
-          <div class="tree-item" :class="{ sel: src.mode === 'query' }" @click="chooseQuery"><CodeXml :size="14" /> <b>Custom SQL query</b></div>
+          <div v-if="only === 'all'" class="tree-item" :class="{ sel: src.mode === 'query' }" @click="chooseQuery"><CodeXml :size="14" /> <b>Custom SQL query</b></div>
           <div v-if="!src.connectionId" class="empty-hint">Choose a connection, or click <b>New connection…</b> to log in to SQL Server, Oracle, PostgreSQL, MySQL or SQLite.</div>
           <div v-else-if="loadingSchema" class="empty-hint">Loading database objects…</div>
-          <template v-for="k in KINDS" v-else :key="k.key">
-            <template v-if="schema">
+          <div v-else-if="schema && only === 'procedures'" class="hint" style="padding: 4px 8px">Click a procedure: its parameters and fields load at once.</div>
+          <template v-for="k in shownKinds" :key="k.key">
+            <template v-if="schema && src.connectionId && !loadingSchema">
               <div class="tree-item" style="font-weight: 600" @click="open[k.key] = !open[k.key]">
                 <component :is="open[k.key] ? ChevronDown : ChevronRight" :size="13" />
                 <component :is="k.icon" :size="14" /> {{ k.label }}
@@ -300,7 +384,7 @@ onMounted(async () => {
               </div>
               <template v-if="open[k.key]">
                 <div
-                  v-for="o in filtered(k.key).slice(0, 500)"
+                  v-for="o in filtered(k.key).slice(0, LIST_CAP)"
                   :key="fullName(o) + (o.specific ?? '')"
                   class="tree-item"
                   style="padding-left: 30px"
@@ -311,7 +395,7 @@ onMounted(async () => {
                   <span style="overflow: hidden; text-overflow: ellipsis">{{ fullName(o) }}</span>
                   <span v-if="o.returnsTable" class="type">table</span>
                 </div>
-                <div v-if="filtered(k.key).length > 500" class="hint" style="padding-left: 30px">…refine the search to see more</div>
+                <div v-if="filtered(k.key).length > LIST_CAP" class="hint" style="padding-left: 30px">…{{ filtered(k.key).length - LIST_CAP }} more: type in the search box to find them</div>
               </template>
             </template>
           </template>
@@ -375,3 +459,38 @@ onMounted(async () => {
     <ConnectionDialog v-if="connDialog" :connection="connDialog.conn" @close="connDialog = null" @saved="onSaved" />
   </div>
 </template>
+
+<style scoped>
+.kind-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.kind-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.kind-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.kind-n {
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+</style>

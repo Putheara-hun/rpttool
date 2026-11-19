@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { deepClone } from '../model/clone';
 import { computed, nextTick, ref, toRaw, watch } from 'vue';
-import { Database, DatabaseZap, Plus, Star, Trash2, Upload } from 'lucide-vue-next';
+import { Database, DatabaseZap, Plus, Star, Trash2, Upload, Workflow } from 'lucide-vue-next';
 import Modal from '../components/Modal.vue';
 import SqlSourceEditor from './SqlSourceEditor.vue';
 import type { DataSourceDef, FieldType, Row } from '../model/types';
 import { uid } from '../model/defaults';
 import { SAMPLE_SETS } from '../data/sampleData';
 import { coerceRows, inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
-import { DbError, executeSql, fieldsFromResult, providerLabel, resolveSqlParams } from '../data/dbApi';
+import { DbError, describeSql, executeSql, fieldsFromResult, providerLabel, resolveSqlParams } from '../data/dbApi';
 import { closeDialog, dataCache, dataParamCtx, ensureData, mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
 import { defaultToString } from '../engine/format';
 
@@ -24,10 +24,20 @@ const addOpen = ref(false);
 const isSql = computed(() => cur.value?.kind === 'sql');
 
 const newSql = () => ({ connectionId: '', mode: 'table' as const, params: [], maxRows: 100000 });
-function add(kind: DataSourceDef['kind']) {
+/** database sources added with "Stored procedure": their object list opens on procedures */
+const focusOf = ref<Record<string, 'procedures'>>({});
+/** a name no other data source has: SP_LOAN_PERFORMANCE, SP_LOAN_PERFORMANCE_2 … */
+function uniqueName(base: string, self: DataSourceDef) {
+  const clean = base.replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '') || 'Database';
+  let n = clean;
+  for (let k = 2; list.value.some((d) => d !== self && d.name.toLowerCase() === n.toLowerCase()); k++) n = `${clean}_${k}`;
+  return n;
+}
+function add(kind: DataSourceDef['kind'], focus?: 'procedures') {
   addOpen.value = false;
   const base: DataSourceDef = { id: uid('ds'), name: 'DataSource' + (list.value.length + 1), kind, fields: [] };
   if (kind === 'sql') Object.assign(base, { name: 'Database' + (list.value.filter((d) => d.kind === 'sql').length + 1), sql: newSql() });
+  if (focus) focusOf.value[base.id] = focus;
   if (kind === 'sample') Object.assign(base, { sample: 'orders', name: 'Orders' });
   if (kind === 'json') base.content = '[\n  { "Name": "Alpha", "Value": 10, "Date": "2025-01-15" },\n  { "Name": "Beta", "Value": 25, "Date": "2025-02-03" }\n]';
   if (kind === 'csv') base.content = 'Name,Value,Date\nAlpha,10,2025-01-15\nBeta,25,2025-02-03';
@@ -69,32 +79,104 @@ function remove() {
   selId.value = list.value[0]?.id ?? null;
 }
 
-/** Run the database source (first 200 rows) to get its fields and a preview; asks for a login when needed. */
-async function previewSql(ds: DataSourceDef, detect: boolean) {
-  const s = ds.sql;
-  if (!s?.connectionId || (s.mode === 'query' ? !s.query?.trim() : !s.name)) return;
-  const run = () => {
-    const raw = deepClone(s);
-    return executeSql(raw, resolveSqlParams(raw, dataParamCtx()), 200);
-  };
-  let r;
+/** Call the database for a source; asks for a login (or the connection again) when needed and retries once. */
+async function withDb<T>(ds: DataSourceDef, fn: () => Promise<T>): Promise<T> {
+  const s = ds.sql!;
   try {
-    r = await run();
+    return await fn();
   } catch (e) {
-    if (e instanceof DbError && e.needLogin && e.connectionId && (await requestLogin(e.connectionId, e.connectionName ?? s.connectionName ?? ''))) r = await run();
-    else if (e instanceof DbError && (e.authFailed || e.missingConnection)) {
+    if (e instanceof DbError && e.needLogin && e.connectionId && (await requestLogin(e.connectionId, e.connectionName ?? s.connectionName ?? ''))) return await fn();
+    if (e instanceof DbError && (e.authFailed || e.missingConnection)) {
       // the login was refused / the connection is gone: ask for server, user and password again
       const c = await requestReconnect({ connectionId: s.connectionId, connectionName: s.connectionName, reason: e.message, dataSource: ds.name, missing: e.missingConnection });
       if (!c?.id) throw e;
       s.connectionId = c.id;
       s.connectionName = c.name;
-      r = await run();
-    } else throw e;
+      return await fn();
+    }
+    throw e;
   }
+}
+const sqlReady = (ds: DataSourceDef) => {
+  const s = ds.sql;
+  return !!s?.connectionId && (s.mode === 'query' ? !!s.query?.trim() : !!s.name);
+};
+
+/** Run the database source (first 200 rows) to get its fields and a preview; asks for a login when needed. */
+async function previewSql(ds: DataSourceDef, detect: boolean) {
+  const s = ds.sql;
+  if (!s || !sqlReady(ds)) return;
+  const r = await withDb(ds, () => {
+    const raw = deepClone(s);
+    return executeSql(raw, resolveSqlParams(raw, dataParamCtx()), 200);
+  });
   const fields = fieldsFromResult(r, inferFields);
   if (detect || !ds.fields.length || fields.map((f) => f.name).join() !== ds.fields.map((f) => f.name).join()) ds.fields = fields;
   previewRows.value = coerceRows(r.rows, ds.fields);
   previewInfo.value = `${r.rows.length}${r.truncated ? '+' : ''} rows · ${r.ms} ms`;
+}
+
+/**
+ * Read a database source's fields from its definition, without fetching rows (procedures are not run, except a
+ * procedure the database cannot describe, which runs in a transaction that is rolled back). True when fields came back.
+ */
+async function describeFields(ds: DataSourceDef): Promise<boolean> {
+  const s = ds.sql;
+  if (!s || !sqlReady(ds)) return false;
+  const r = await withDb(ds, () => {
+    const raw = deepClone(s);
+    return describeSql(raw, resolveSqlParams(raw, dataParamCtx()));
+  });
+  if (!r.columns.length) return false;
+  ds.fields = r.columns.map((c) => ({ name: c.name, type: (c.type ?? 'string') as FieldType }));
+  return true;
+}
+/** fields of the chosen database source are known, but no rows were fetched yet */
+const fieldsOnly = ref(false);
+
+/**
+ * A table / view / procedure / function was picked: name the data source after it and load its fields at once.
+ * Without input parameters it also previews the rows; with parameters it waits for Preview data.
+ */
+async function onChosen(hasInputs: boolean) {
+  const ds = cur.value;
+  if (!ds?.sql) return;
+  if (/^Database\d+$/.test(ds.name) && ds.sql.mode !== 'query' && ds.sql.name) ds.name = uniqueName(ds.sql.name, ds);
+  previewErr.value = '';
+  previewInfo.value = '';
+  previewRows.value = [];
+  fieldsOnly.value = false;
+  ds.fields = [];
+  loading.value = true;
+  try {
+    const got = await describeFields(ds);
+    if (!hasInputs) await previewSql(ds, !got);
+    else if (got) fieldsOnly.value = true;
+    else previewErr.value = 'The fields could not be read from the definition. Give the parameters a value (or the report parameters a default value) and click Preview data.';
+  } catch (e) {
+    previewErr.value = (e as Error).message;
+  } finally {
+    loading.value = false;
+  }
+}
+/** Detect: database sources read their definition first (nothing runs); others parse their rows again */
+async function detect() {
+  const ds = cur.value;
+  if (ds?.kind !== 'sql') return refresh(true);
+  previewErr.value = '';
+  loading.value = true;
+  try {
+    if (await describeFields(ds)) {
+      notify(`${ds.fields.length} fields read from ${ds.sql?.mode === 'query' ? 'the query' : ds.sql?.name}`);
+      return;
+    }
+  } catch (e) {
+    previewErr.value = (e as Error).message;
+    return;
+  } finally {
+    loading.value = false;
+  }
+  await refresh(true);
 }
 
 async function refresh(detect = false) {
@@ -102,6 +184,7 @@ async function refresh(detect = false) {
   previewErr.value = '';
   previewInfo.value = '';
   previewRows.value = [];
+  fieldsOnly.value = false;
   if (!ds) return;
   loading.value = true;
   try {
@@ -118,6 +201,8 @@ async function refresh(detect = false) {
   }
 }
 watch(selId, () => refresh(false), { immediate: true });
+// opened from the Field List's "Add a stored procedure" button
+if (state.dialogProps?.add === 'procedure') add('sql', 'procedures');
 
 function loadFile() {
   const ds = cur.value;
@@ -175,6 +260,7 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
         <div class="dropdown">
           <button class="btn primary" style="width: 100%" @click="addOpen = !addOpen"><Plus :size="14" /> Add data source</button>
           <div v-if="addOpen" class="dropdown-menu" style="bottom: 100%; top: auto; min-width: 260px">
+            <button class="menu-item" @click="add('sql', 'procedures')"><Workflow :size="14" /> <b>Stored procedure</b>&nbsp;(parameters and fields load at once)</button>
             <button class="menu-item" @click="add('sql')"><DatabaseZap :size="14" /> <b>Database</b>&nbsp;(SQL Server, Oracle, PostgreSQL, MySQL…)</button>
             <div class="menu-sep" />
             <button class="menu-item" @click="add('sample')">Sample data set</button>
@@ -234,7 +320,15 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
             @paste="afterPaste"
           />
         </template>
-        <SqlSourceEditor v-if="cur.kind === 'sql' && cur.sql" :key="cur.id" :source="cur.sql" @preview="refresh(true)" @switch-kind="switchKind" />
+        <SqlSourceEditor
+          v-if="cur.kind === 'sql' && cur.sql"
+          :key="cur.id"
+          :source="cur.sql"
+          :focus="focusOf[cur.id]"
+          @preview="refresh(true)"
+          @chosen="onChosen"
+          @switch-kind="switchKind"
+        />
         <div v-if="previewErr" class="err" style="word-break: break-word">{{ previewErr }}</div>
 
         <div class="split" style="flex: 1; min-height: 0">
@@ -242,7 +336,7 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
             <div class="row">
               <span class="section-title" style="margin: 0">Fields ({{ cur.fields.length }})</span>
               <span class="grow" />
-              <button class="btn small" @click="refresh(true)">Detect</button>
+              <button class="btn small" :title="isSql ? 'Read the fields from the database (nothing is run)' : 'Detect the fields from the rows'" @click="detect">Detect</button>
             </div>
             <div class="list-box" style="flex: 1">
               <div v-for="f in cur.fields" :key="f.name" class="list-row" style="padding: 3px 8px">
@@ -257,7 +351,12 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
             <span class="section-title" style="margin: 0"
               >Preview ({{ loading ? 'loading…' : previewInfo || previewRows.length + ' rows' }}){{ isSql && cur.sql?.connectionName ? ' — ' + cur.sql.connectionName : '' }}</span
             >
-            <div class="list-box" style="flex: 1">
+            <div v-if="fieldsOnly && !previewRows.length" class="list-box empty-hint" style="flex: 1">
+              <b>{{ cur.fields.length }} fields loaded</b> from {{ cur.sql?.name ?? 'the query' }} — no rows fetched yet.<br />
+              Click <b>OK</b>: they appear in the Field List, ready to drag onto the report, and its parameters under Parameters (the preview asks for their values).<br /><br />
+              To see rows here, give the parameters a value and click <b>Preview data</b>.
+            </div>
+            <div v-else class="list-box" style="flex: 1">
               <table class="data-table">
                 <thead>
                   <tr><th v-for="c in cols" :key="c">{{ c }}</th></tr>

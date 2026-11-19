@@ -117,6 +117,29 @@ export default {
       };
     });
   },
+  /** Result columns without running anything that could change data: LIMIT 0 for tables / views, the declared OUT / TABLE columns of routines. */
+  describe(c, src) {
+    return run(c, async (cl) => {
+      if (src.mode === 'table' || src.mode === 'view') {
+        const res = await cl.query({ text: `SELECT * FROM ${qualified('postgres', src.schema, src.name)} LIMIT 0`, rowMode: 'array' });
+        return { columns: (res.fields ?? []).map((f) => ({ name: f.name, type: oidType(f.dataTypeID), dbType: String(f.dataTypeID) })), how: 'definition' };
+      }
+      if (src.mode !== 'function' && src.mode !== 'procedure') return { columns: [], how: 'none' };
+      const r = await cl.query(
+        `SELECT parameter_name AS n, data_type AS t, parameter_mode AS m, ordinal_position AS pos FROM information_schema.parameters
+         WHERE specific_schema = $1 AND specific_name = COALESCE($2, (SELECT specific_name FROM information_schema.routines WHERE routine_schema = $1 AND routine_name = $3 LIMIT 1))
+         ORDER BY ordinal_position`,
+        [src.schema, src.specific || null, src.name],
+      );
+      const out = r.rows.filter((x) => x.m === 'OUT' || x.m === 'TABLE' || x.m === 'INOUT');
+      if (out.length) return { columns: out.map((x) => ({ name: x.n || 'Column' + x.pos, type: fieldType(x.t), dbType: x.t })), how: 'definition' };
+      const ret = String(src.returnType ?? '').toLowerCase();
+      if (src.mode === 'function' && ret && ret !== 'void' && !/^setof record|^record$/.test(ret)) {
+        return { columns: [{ name: src.name, type: fieldType(ret.replace(/^setof\s+/, '')), dbType: ret }], how: 'definition' };
+      }
+      return { columns: [], how: 'none' };
+    });
+  },
   execute(c, src, values, maxRows) {
     return run(c, async (cl) => {
       const obj = qualified('postgres', src.schema, src.name);

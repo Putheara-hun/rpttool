@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Calculator, ChevronDown, ChevronRight, Database, DatabaseZap, Hash, Plus, Star, Variable } from 'lucide-vue-next';
+import { Calculator, ChevronDown, ChevronRight, Database, DatabaseZap, Hash, Plus, Star, Variable, Workflow } from 'lucide-vue-next';
 import { specialFields, type SpecialField } from './specialFields';
 import { objectLabel } from '../data/dbApi';
 import { addElement, dataErrors, fieldsOf, mutate, openDialog, primaryElement, rowsFor, state } from '../store/designer';
@@ -55,7 +55,10 @@ function setMain(id: string) {
   <div class="tree">
     <div class="panel-title">
       <Database :size="14" /> Data Sources
-      <button class="icon-btn" style="margin-left: auto; width: 22px; height: 22px" title="Manage data sources" @click="openDialog('dataSources')"><Plus :size="14" /></button>
+      <button class="icon-btn" style="margin-left: auto; width: 22px; height: 22px" title="Add a stored procedure: its fields and parameters load at once" @click="openDialog('dataSources', { add: 'procedure' })">
+        <Workflow :size="14" />
+      </button>
+      <button class="icon-btn" style="width: 22px; height: 22px" title="Manage data sources" @click="openDialog('dataSources')"><Plus :size="14" /></button>
     </div>
     <div v-if="!sources.length" class="empty-hint">
       No data source yet. <a href="#" @click.prevent="openDialog('dataSources')">Add a data source</a> (sample data, JSON, CSV or a URL) and then drag its fields onto the report.

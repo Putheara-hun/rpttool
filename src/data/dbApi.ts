@@ -150,25 +150,39 @@ export function resolveSqlParams(src: SqlSource, ctx: Partial<EvalContext>): { n
     });
 }
 
+const sourceBody = (src: SqlSource) => ({
+  mode: src.mode,
+  schema: src.schema,
+  name: src.name,
+  pkg: src.pkg,
+  specific: src.specific,
+  returnsTable: src.returnsTable,
+  returnType: src.returnType,
+  query: src.query,
+  params: src.params.map((p) => ({ name: p.name, mode: p.mode, dbType: p.dbType, type: p.type })),
+});
+
 export function executeSql(src: SqlSource, params: { name: string; type: ParamType; value: unknown }[], maxRows: number) {
   return api<DbResult>('POST', './api/db/execute', {
     connectionId: src.connectionId,
     // the name lets the server find the connection when it was created again (new id) after a restart
     connectionName: src.connectionName,
-    source: {
-      mode: src.mode,
-      schema: src.schema,
-      name: src.name,
-      pkg: src.pkg,
-      specific: src.specific,
-      returnsTable: src.returnsTable,
-      returnType: src.returnType,
-      query: src.query,
-      params: src.params.map((p) => ({ name: p.name, mode: p.mode, dbType: p.dbType })),
-    },
+    source: sourceBody(src),
     params,
     maxRows,
   });
+}
+
+export interface DbDescribe {
+  columns: { name: string; type: FieldType | null; dbType?: string | null }[];
+  /** definition = read from the database's description (nothing ran); run = the procedure ran in a rolled-back transaction; none = cannot tell without Preview data */
+  how: 'definition' | 'run' | 'none';
+  /** why the database could not describe it (e.g. it uses a temp table) */
+  note?: string;
+}
+/** The fields of a database source, read from its definition — no rows are fetched. */
+export function describeSql(src: SqlSource, params: { name: string; type: ParamType; value: unknown }[]) {
+  return api<DbDescribe>('POST', './api/db/describe', { connectionId: src.connectionId, connectionName: src.connectionName, source: sourceBody(src), params });
 }
 
 export function fieldsFromResult(r: DbResult, infer: (rows: Row[]) => FieldDef[]): FieldDef[] {

@@ -1,5 +1,5 @@
 // HTTP API for database access. Mounted as connect-style middleware (Vite dev server) or by server/index.mjs.
-import { ApiError } from './common.mjs';
+import { ApiError, buildResult } from './common.mjs';
 import { AUTH_ENABLED, login, logout, PUBLIC, signedIn, visitorOf } from './auth.mjs';
 import { assertPublicTarget, countAttempt, isPrivateAddress } from './netguard.mjs';
 import dns from 'node:dns/promises';
@@ -134,6 +134,21 @@ async function route(method, url, body, owner, req) {
   if (method === 'POST' && path === '/api/db/params') {
     const c = await connFor(body.connectionId, owner);
     return (await driver(c.provider)).params(c, body.object ?? {});
+  }
+  if (method === 'POST' && path === '/api/db/describe') {
+    // the fields of a table / view / procedure / function / query, without fetching its rows
+    const c = await connFor(body.connectionId, owner, body.connectionName);
+    const src = body.source ?? {};
+    if (src.mode === 'query' ? !String(src.query ?? '').trim() : !src.name) return { columns: [], how: 'none' };
+    const values = Object.fromEntries((body.params ?? []).map((p) => [p.name, p]));
+    const d = await driver(c.provider);
+    const r = d.describe
+      ? await d.describe(c, src, values)
+      : src.mode === 'table' || src.mode === 'view'
+        ? { ...(await d.execute(c, src, values, 1)), how: 'definition' }
+        : { columns: [], how: 'none' };
+    // same unique names as executed results (Name, Name_1, Column3 …)
+    return { columns: buildResult(r.columns ?? [], [], 0).columns, how: r.how ?? 'definition', ...(r.note ? { note: r.note } : {}) };
   }
   if (method === 'POST' && path === '/api/db/execute') {
     const c = await connFor(body.connectionId, owner, body.connectionName);
