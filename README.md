@@ -150,6 +150,13 @@ Google font is drawn as an image, like Khmer text) use the font; for RDL the fon
 
 ## Table columns
 
+- The **Table** tool, clicked on the Page Header, Detail or Report Footer, adds three tables lined up: the captions in
+  the **Page Header** (once per page), the data row in **Detail** (once per record) and a **Grand Total** row in the
+  **Report Footer** (once, at the end) — in a detail report section: its own header / detail / footer. Missing bands
+  are added. **Alt + click** (or another band) gives one table.
+- Tables lined up (same left edge and column widths) stay lined up: dragging a column border, typing Column Widths,
+  adding / removing / moving a column, Equal Widths, Fit to Page Width, resizing the table or moving it left / right
+  changes all of them, so the totals stay under their columns.
 - Right-click a table ▸ **Column Widths** ▸ **Equal Widths** (all columns, or the selected cells' columns),
   **Match Other Tables to This One** (the other tables — or the other *selected* tables — take this table's column
   lines, e.g. Page Header / Detail / Report Footer), **Fit to Page Width**. Also in Layout ▸ Table and Home ▸ Table ▸ Columns ▾.

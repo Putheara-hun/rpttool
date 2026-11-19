@@ -30,6 +30,7 @@ import {
   unmergeCells,
   findElement,
   notify,
+  setTableColumns,
 } from '../store/designer';
 import { PAPER_SIZES, pxToMm } from '../model/defaults';
 import { webImageToDataUrl } from '../export/raster';
@@ -191,11 +192,8 @@ function setColumns(text: string) {
     .map(Number)
     .filter((n) => n > 0);
   if (nums.length !== el.columns.length) return;
-  mutate((r) => {
-    const t = r.elements.find((e) => e.id === el.id) as TableElement;
-    t.columns = nums;
-    t.width = nums.reduce((a, b) => a + b, 0);
-  });
+  // lined-up tables (header / data / total rows) take the same widths
+  setTableColumns(el.id, nums);
 }
 
 const isSet = (d: PropDef) => {

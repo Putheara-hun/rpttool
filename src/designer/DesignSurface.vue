@@ -95,6 +95,7 @@ import {
   visibleBands,
   zOrder,
   linkedTables,
+  addTableSet,
   moveTableColumn,
   setCrosstabField,
   CROSSTAB_LABEL,
@@ -208,7 +209,8 @@ type Drag =
   | { kind: 'marquee'; start: Pt; cur: Pt; additive: boolean; bandId: string }
   | { kind: 'band'; bandId: string; startY: number; startH: number; minH: number }
   | { kind: 'cells'; id: string }
-  | { kind: 'tableBorder'; id: string; axis: 'col' | 'row'; index: number; start: Pt; orig: number[]; base: number; snapTo: number[]; neighbor: boolean; key: string }
+  /** linked: tables lined up with it (header / data / total rows in other bands) that get the same column widths */
+  | { kind: 'tableBorder'; id: string; axis: 'col' | 'row'; index: number; start: Pt; orig: number[]; base: number; snapTo: number[]; neighbor: boolean; key: string; linked: string[] }
   /** a column dragged by its grip above the table; `to` = the gap it goes to (null = stays) */
   | { kind: 'colMove'; id: string; from: number; start: Pt; x: number; moved: boolean; to: number | null; blocked: boolean }
   /** a line of a cross tab: `k` row headers / cells / rows lie before it, so they share the distance moved */
@@ -334,7 +336,7 @@ function onMouseDown(e: MouseEvent) {
     return;
   }
   if (state.tool) {
-    placeTool(state.tool, p, e.shiftKey);
+    placeTool(state.tool, p, e.shiftKey, undefined, e.altKey);
     e.preventDefault();
     return;
   }
@@ -474,9 +476,10 @@ function startBorderDrag(tb: { el: TableElement; axis: 'col' | 'row'; index: num
   const base = (tb.axis === 'col' ? a.x : a.y) + orig.slice(0, tb.index + 1).reduce((s, v) => s + v, 0);
   // column borders snap to the column lines of other tables and the edges of other controls
   const snapTo: number[] = [];
+  const linked = tb.axis === 'col' ? linkedTables(el).map((o) => o.id) : [];
   if (tb.axis === 'col')
     for (const o of state.report.elements) {
-      if (o.id === el.id || !visibleBandIds.value.has(o.bandId)) continue;
+      if (o.id === el.id || linked.includes(o.id) || !visibleBandIds.value.has(o.bandId)) continue;
       const r = absRect(o);
       snapTo.push(r.x, r.x + r.w);
       if (o.type === 'table') {
@@ -496,6 +499,7 @@ function startBorderDrag(tb: { el: TableElement; axis: 'col' | 'row'; index: num
     // inner column border: the column to the right gives / takes the width (table keeps its width); Shift = only this column
     neighbor: tb.axis === 'col' && tb.index < el.columns.length - 1 && !shift,
     key: 'border:' + el.id + ':' + Date.now(),
+    linked,
   };
   startWindowDrag();
 }
@@ -670,6 +674,13 @@ function onMove(e: MouseEvent) {
       if (d.axis === 'col') {
         t.columns = sizes.map((v) => Math.round(v));
         t.width = t.columns.reduce((a, b) => a + b, 0);
+        // the lined-up tables (header / data / total rows) take the same widths
+        for (const id of d.linked) {
+          const o = r.elements.find((x) => x.id === id);
+          if (o?.type !== 'table' || o.columns.length !== t.columns.length) continue;
+          o.columns = [...t.columns];
+          o.width = t.width;
+        }
       } else {
         sizes.forEach((h, k) => t.rows[k] && (t.rows[k].height = Math.round(h)));
         t.height = t.rows.reduce((a, b) => a + b.height, 0);
@@ -820,12 +831,14 @@ function onUp(e: MouseEvent) {
 }
 
 // ------------------------------------------------------------------ tools & drop
-function placeTool(tool: ToolId, p: Pt, keep = false, extra?: Partial<ReportElement>) {
+/** `single`: Alt held — the Table tool makes one table instead of the header / data / total set */
+function placeTool(tool: ToolId, p: Pt, keep = false, extra?: Partial<ReportElement>, single = false) {
   const bx = bandAt(p.y);
   if (!bx) return;
   const x = snap(p.x - ml.value);
   const y = snap(Math.max(0, p.y - bx.top));
-  addElement(tool, bx.band.id, x, y, extra);
+  if (tool === 'table' && !extra) addTableSet(bx.band.id, x, y, single);
+  else addElement(tool, bx.band.id, x, y, extra);
   if (!keep) state.tool = null;
 }
 
@@ -857,7 +870,7 @@ function onDrop(e: DragEvent) {
   if (!dt) return;
   const p = toPage(e);
   const tool = dt.getData('text/x-rt-tool');
-  if (tool) return placeTool(tool as ToolId, p, false);
+  if (tool) return placeTool(tool as ToolId, p, false, undefined, e.altKey);
   const f = dt.getData('text/x-rt-field');
   if (f) {
     const choice = JSON.parse(f) as FieldChoice;

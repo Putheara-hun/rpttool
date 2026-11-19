@@ -7,6 +7,7 @@ import {
   applyAutoWidth,
   applyOrientation,
   applyPaper,
+  BAND_LABELS,
   contentRight,
   contentWidth,
   createElement,
@@ -274,6 +275,104 @@ export function addElement(tool: ToolId, bandId: string, x: number, y: number, e
   state.selection = [el.id];
   state.selectedBandId = null;
   return el;
+}
+
+// ------------------------------------------------------------------ the Table tool: captions, rows and total together
+/**
+ * The three bands of a table set dropped on `band`: the main report's Page Header / Detail / Report Footer, or a detail
+ * report's own header / detail / footer. null: another band (Report Header, groups, Page Footer) gets a single table.
+ */
+function tableSetKind(band: Band): 'main' | 'section' | null {
+  if (band.detailReportId) return band.type === 'drHeader' || band.type === 'drDetail' || band.type === 'drFooter' ? 'section' : null;
+  if (band.groupId) return null;
+  return band.type === 'pageHeader' || band.type === 'detail' || band.type === 'reportFooter' ? 'main' : null;
+}
+
+/**
+ * The Table tool: three tables lined up, so the totals sit under their columns without lining them up by hand —
+ *   captions in the Page Header (printed once per page),
+ *   the data row in Detail (printed for every record),
+ *   the Grand Total row in the Report Footer (printed once, at the end);
+ * a detail report: its own header / detail / footer (total row "Total"). Missing bands are added.
+ * They share the left edge and the columns, and keep them: resizing, adding, removing or moving a column, or moving
+ * the table left / right, changes all three (linkedTables).
+ * Dropped on another band, or `single` (Alt): one table there, as before.
+ */
+export function addTableSet(bandId: string, x: number, y: number, single = false): ReportElement | null {
+  const dropBand = findBand(bandId);
+  if (!dropBand) return null;
+  const kind = single ? null : tableSetKind(dropBand);
+  if (!kind) return addElement('table', bandId, x, y);
+  const total = kind === 'main' ? 'Grand Total' : 'Total';
+  let bodyId = '';
+  let where = '';
+  mutate((r) => {
+    const owner = dropBand.detailReportId;
+    const bandOf = (type: BandType) => {
+      let b = r.bands.find((x) => x.type === type && (owner ? x.detailReportId === owner : !x.detailReportId && !x.groupId));
+      if (!b) {
+        b = newBand(type, owner);
+        r.bands.push(b);
+      }
+      return b;
+    };
+    const header = bandOf(kind === 'main' ? 'pageHeader' : 'drHeader');
+    const body = bandOf(kind === 'main' ? 'detail' : 'drDetail');
+    const footer = bandOf(kind === 'main' ? 'reportFooter' : 'drFooter');
+
+    const cols = [100, 100, 100];
+    const width = cols.reduce((a, b) => a + b, 0);
+    const cw = contentWidth(r);
+    let left = Math.max(0, Math.round(x));
+    if (!r.page.autoWidth && left + width > cw) left = Math.max(0, cw - width);
+    // the band it was dropped on: where it was dropped; the other two: under what they already hold
+    const topIn = (b: Band) => (b.id === bandId ? Math.max(0, Math.round(y)) : Math.ceil(Math.max(0, ...r.elements.filter((e) => e.bandId === b.id).map((e) => e.y + e.height))));
+    const cell = (text: string, style: StyleProps = {}): TableCell => ({ ...emptyCell(), text, style });
+    const make = (b: Band, name: string, cells: TableCell[], canGrow: boolean) => {
+      const t = createElement('table', b.id, left, topIn(b), r.elements, { columns: [...cols], rows: [{ height: 25, cells }], width, height: 25, canGrow } as Partial<ReportElement>) as TableElement;
+      t.name = uniqueName(r, name);
+      r.elements.push(t);
+      ensureBandFits(r, b.id);
+      return t;
+    };
+    make(header, 'tableHeader', cols.map((_, i) => cell(`Column ${i + 1}`, { bold: true, textAlign: 'center', backColor: '#f3f4f6' })), false);
+    bodyId = make(body, 'table', cols.map(() => cell('')), true).id;
+    make(footer, 'tableTotal', cols.map((_, i) => cell(i === 0 ? total : '', { bold: true })), false);
+    where = `captions in ${BAND_LABELS[header.type]}, rows in ${BAND_LABELS[body.type]}, ${total} in ${BAND_LABELS[footer.type]}`;
+  });
+  state.selection = [bodyId];
+  state.selectedCell = null;
+  state.selectedBandId = null;
+  notify(`Table added: ${where}. Their columns stay lined up. (Alt + click: a single table)`, 'success');
+  return findElement(bodyId) ?? null;
+}
+
+/**
+ * Tables that were lined up with `t` before it changed (left edge `x`, columns `cols`) take its new left edge and
+ * column widths, so a header / data / total set stays in step. Call inside mutate; `skip`: tables changed by the
+ * same command (e.g. several selected and resized together).
+ */
+function followTable(r: ReportDef, t: TableElement, x: number, cols: number[], skip?: Set<string>) {
+  for (const o of linkedTables({ ...t, x, columns: cols }, r.elements)) {
+    if (skip?.has(o.id)) continue;
+    o.x = t.x;
+    if (o.columns.length === t.columns.length) {
+      o.columns = [...t.columns];
+      o.width = o.columns.reduce((a, b) => a + b, 0);
+    }
+  }
+}
+
+/** Column widths typed in the Property Grid; lined-up tables follow. */
+export function setTableColumns(id: string, widths: number[]) {
+  mutate((r) => {
+    const t = r.elements.find((e) => e.id === id);
+    if (!t || t.type !== 'table' || widths.length !== t.columns.length) return;
+    const before = [...t.columns];
+    t.columns = [...widths];
+    t.width = widths.reduce((a, b) => a + b, 0);
+    followTable(r, t, t.x, before);
+  });
 }
 
 export function deleteSelection() {
@@ -608,12 +707,16 @@ export function applyFormatBrush(elementId: string, cell: { row: number; col: nu
 }
 
 export function moveElements(moves: { id: string; x: number; y: number; bandId: string }[]) {
+  const moving = new Set(moves.map((m) => m.id));
   mutate((r) => {
     const touched = new Set<string>();
     for (const m of moves) {
       const el = r.elements.find((e) => e.id === m.id);
       if (!el || el.locked) continue;
+      const x0 = el.x;
       el.x = Math.round(m.x);
+      // a table moved left / right takes its lined-up tables along (only sideways: they stay in their bands)
+      if (el.type === 'table' && el.x !== x0) followTable(r, el, x0, el.columns, moving);
       el.y = Math.max(0, Math.round(m.y));
       el.bandId = m.bandId;
       touched.add(m.bandId);
@@ -623,17 +726,23 @@ export function moveElements(moves: { id: string; x: number; y: number; bandId: 
 }
 
 export function resizeElements(rects: { id: string; x: number; y: number; width: number; height: number }[]) {
+  const resizing = new Set(rects.map((rc) => rc.id));
   mutate((r) => {
     for (const rc of rects) {
       const el = r.elements.find((e) => e.id === rc.id);
       if (!el || el.locked) continue;
       const sx = rc.width / el.width;
       const sy = rc.height / el.height;
+      const x0 = el.x;
+      const cols0 = el.type === 'table' ? [...el.columns] : [];
       el.x = Math.round(rc.x);
       el.y = Math.max(0, Math.round(rc.y));
       el.width = Math.max(2, Math.round(rc.width));
       el.height = Math.max(2, Math.round(rc.height));
-      if (el.type === 'table') scaleTable(el, sx, sy);
+      if (el.type === 'table') {
+        scaleTable(el, sx, sy);
+        followTable(r, el, x0, cols0, resizing);
+      }
       // a cross tab grows / shrinks its row header, cells and rows with the box
       else if (el.type === 'crosstab') scaleCrosstab(el, rc.width, rc.height);
       ensureBandFits(r, el.bandId);
@@ -643,7 +752,12 @@ export function resizeElements(rects: { id: string; x: number; y: number; width:
 
 export function scaleTable(el: TableElement, sx: number, sy: number) {
   if (isFinite(sx) && Math.abs(sx - 1) > 0.001) {
-    el.columns = el.columns.map((c) => Math.max(8, Math.round(c * sx)));
+    // the last column takes the rounding, so the table is exactly as wide as asked (e.g. the full page width)
+    const total = el.columns.reduce((a, b) => a + b, 0) * sx;
+    el.columns = exactWidths(
+      el.columns.map((c) => c * sx),
+      total,
+    );
     el.width = el.columns.reduce((a, b) => a + b, 0);
   }
   if (isFinite(sy) && Math.abs(sy - 1) > 0.001) {
@@ -658,6 +772,8 @@ export function nudge(dx: number, dy: number, resize = false) {
   mutate((r) => {
     for (const el of r.elements) {
       if (!ids.has(el.id) || el.locked) continue;
+      const x0 = el.x;
+      const cols0 = el.type === 'table' ? [...el.columns] : [];
       if (resize) {
         el.width = Math.max(2, el.width + dx);
         el.height = Math.max(2, el.height + dy);
@@ -676,6 +792,7 @@ export function nudge(dx: number, dy: number, resize = false) {
         el.x += dx;
         el.y = Math.max(0, el.y + dy);
       }
+      if (el.type === 'table') followTable(r, el, x0, cols0, ids);
       ensureBandFits(r, el.bandId);
     }
   }, 'nudge');
@@ -712,12 +829,16 @@ export function setElementProp(path: string, value: unknown, ids?: string[]) {
         }
         continue;
       }
+      const x0 = el.x;
+      const cols0 = el.type === 'table' ? [...el.columns] : [];
       setPath(el, path, value);
+      if (el.type === 'table' && path === 'x') followTable(r, el, x0, cols0, targets);
       if (path === 'width' || path === 'height') {
         if (el.type === 'table') {
           const tw = el.columns.reduce((a, b) => a + b, 0);
           const th = el.rows.reduce((a, b) => a + b.height, 0);
           scaleTable(el, el.width / tw, el.height / th);
+          if (path === 'width') followTable(r, el, x0, cols0, targets);
         } else if (el.type === 'crosstab') scaleCrosstab(el, el.width, el.height);
         ensureBandFits(r, el.bandId);
       } else if (el.type === 'crosstab' && ['rowHeaderWidth', 'cellWidth', 'rowHeight', 'showRowTotals', 'showColumnTotals'].includes(path)) {
@@ -1408,11 +1529,13 @@ export function equalizeColumns(tableId?: string) {
   const [c0, c1] = rg && rg.c1 > rg.c0 ? [rg.c0, rg.c1] : [0, t.columns.length - 1];
   mutate((r) => {
     const el = r.elements.find((e) => e.id === t.id) as TableElement;
+    const cols0 = [...el.columns];
     const part = el.columns.slice(c0, c1 + 1);
     const total = part.reduce((a, b) => a + b, 0);
     const eq = exactWidths(part.map(() => total / part.length), total);
     el.columns.splice(c0, part.length, ...eq);
     el.width = el.columns.reduce((a, b) => a + b, 0);
+    followTable(r, el, el.x, cols0);
   });
   notify(c1 - c0 + 1 === t.columns.length ? 'All columns have the same width now' : `Columns ${c0 + 1}–${c1 + 1} have the same width now`, 'success');
 }
@@ -1480,6 +1603,8 @@ export function fitTableToPageWidth(tableId?: string) {
   if (!t) return notify('Select a table first');
   mutate((r) => {
     const el = r.elements.find((e) => e.id === t.id) as TableElement;
+    const x0 = el.x;
+    const cols0 = [...el.columns];
     const cw = contentWidth(r);
     const tw = el.columns.reduce((a, b) => a + b, 0) || 1;
     el.x = 0;
@@ -1488,6 +1613,7 @@ export function fitTableToPageWidth(tableId?: string) {
       cw,
     );
     el.width = el.columns.reduce((a, b) => a + b, 0);
+    followTable(r, el, x0, cols0);
   });
 }
 
@@ -1551,9 +1677,15 @@ export function tableOp(op: 'insertRowAbove' | 'insertRowBelow' | 'deleteRow' | 
   const cell = state.selectedCell;
   if (!cell) return;
   const sel = { row: cell.row, col: cell.col };
+  // a column added / removed in a header / data / total set: the same in the lined-up tables
+  const t0 = findElement(cell.id);
+  const linkedIds = t0?.type === 'table' && /Col/.test(op) ? linkedTables(t0).map((o) => o.id) : [];
+  let alsoIn: string[] = [];
   mutate((r) => {
     const el = r.elements.find((e) => e.id === cell.id) as TableElement | undefined;
     if (!el || el.type !== 'table') return;
+    const linked = linkedIds.map((id) => r.elements.find((e) => e.id === id)).filter((o): o is TableElement => o?.type === 'table');
+    alsoIn = linked.map((o) => o.name);
     if (op === 'insertRowAbove' || op === 'insertRowBelow') {
       const span = spanOf(el.rows[cell.row].cells[cell.col]).rs;
       const at = op === 'insertRowBelow' ? cell.row + span : cell.row;
@@ -1569,20 +1701,26 @@ export function tableOp(op: 'insertRowAbove' | 'insertRowBelow' | 'deleteRow' | 
       const ref = op === 'insertColRight' ? cell.col + span - 1 : cell.col;
       const at = op === 'insertColRight' ? ref + 1 : ref;
       const w = Math.max(30, Math.round(el.columns[ref] / 2));
-      el.columns[ref] -= Math.min(w, el.columns[ref] - 10);
-      insertCol(el, at, w);
+      const take = Math.min(w, el.columns[ref] - 10);
+      for (const t of [el, ...linked]) {
+        t.columns[ref] -= take;
+        insertCol(t, at, w);
+      }
       if (op === 'insertColLeft') sel.col++;
     } else if (op === 'deleteCol') {
       if (el.columns.length <= 1) return;
-      deleteCol(el, cell.col);
+      for (const t of [el, ...linked]) deleteCol(t, cell.col);
       sel.col = Math.min(cell.col, el.columns.length - 1);
     }
-    el.width = el.columns.reduce((a, b) => a + b, 0);
-    el.height = el.rows.reduce((a, b) => a + b.height, 0);
-    ensureBandFits(r, el.bandId);
+    for (const t of [el, ...linked]) {
+      t.width = t.columns.reduce((a, b) => a + b, 0);
+      t.height = t.rows.reduce((a, b) => a + b.height, 0);
+      ensureBandFits(r, t.bandId);
+    }
     const o = ownerOf(el, sel.row, sel.col);
     state.selectedCell = { id: el.id, row: o.row, col: o.col };
   });
+  if (alsoIn.length) notify(`${op === 'deleteCol' ? 'Column removed' : 'Column added'} — also in ${alsoIn.join(', ')}`, 'success');
 }
 
 // ------------------------------------------------------------------ bands & groups

@@ -20,14 +20,19 @@ import {
 import { notify, state } from '../store/designer';
 import type { ToolId } from '../model/defaults';
 
-const groups: { title: string; items: { id: ToolId | null; label: string; icon: any }[] }[] = [
+const groups: { title: string; items: { id: ToolId | null; label: string; icon: any; tip?: string }[] }[] = [
   { title: 'Pointer', items: [{ id: null, label: 'Pointer', icon: MousePointer2 }] },
   {
     title: 'Text & Data',
     items: [
       { id: 'text', label: 'Label', icon: Type },
       { id: 'field', label: 'Data Field', icon: TextCursorInput },
-      { id: 'table', label: 'Table', icon: Table },
+      {
+        id: 'table',
+        label: 'Table',
+        icon: Table,
+        tip: 'Click on the Page Header, Detail or Report Footer: captions, data row and Grand Total row in their bands, lined up (their columns change together). Alt + click: one table',
+      },
       { id: 'checkbox', label: 'Check Box', icon: SquareCheck },
     ],
   },
@@ -80,7 +85,7 @@ function onDragStart(e: DragEvent, id: ToolId | null) {
         class="tool"
         :class="{ active: state.tool === it.id }"
         :draggable="!!it.id"
-        :title="it.id ? 'Click, then click on a band — or drag onto the page' : 'Select / move controls'"
+        :title="it.tip ?? (it.id ? 'Click, then click on a band — or drag onto the page' : 'Select / move controls')"
         @click="pick(it.id)"
         @dragstart="onDragStart($event, it.id)"
       >
