@@ -235,6 +235,19 @@ Sources): opens on the list of procedures (chips: All / Tables / Views / Procedu
 last, so one click on a procedure gives the report its fields and parameters. **Detect** (Fields) reads the
 definition again without running anything.
 
+**No connection: paste the procedure's text.** Paste a stored procedure's whole text (`CREATE [OR ALTER] PROCEDURE …`)
+into the search box of a Database / Stored procedure source (or, on a website without the database service, into the
+box of the *Design from the procedure's text* notice). Nothing connects or runs; the text itself is read:
+- the **parameters** (name, type, the procedure's own `= default`) become report parameters, as when a procedure is
+  picked from a connection;
+- the **fields** are the columns of its first `SELECT` that returns rows (not `SELECT @x = …`, `SELECT … INTO`,
+  `INSERT … SELECT` or sub-queries), with types from `CAST` / `CONVERT`, functions (`COUNT`, `SUM`, `DATEADD` …),
+  values, `DECLARE`d variables, aliases made earlier (CTEs), and finally the column name (`…_DATE`, `…_AMT`, `…_ID` …).
+  Change a type in the Fields list when the guess is wrong;
+- the source becomes a **JSON** source with made-up rows of that shape (**New made-up rows** makes them again), named
+  `DataSet1`, `DataSet2` … by its place in the list — the name an application gives the real rows when it shows the
+  report. `SELECT *` and a procedure that only `EXEC`s another one cannot be read from the text: the dialog says so.
+
 Details:
 - Database access goes through a small Node service in `server/` (runs inside `npm run dev` / `npm start`).
   It only answers requests from this app on `localhost` — unless a team password is set (`REPORTTOOL_PASSWORD`,

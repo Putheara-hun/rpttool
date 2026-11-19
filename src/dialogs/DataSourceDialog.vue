@@ -9,6 +9,7 @@ import { uid } from '../model/defaults';
 import { SAMPLE_SETS } from '../data/sampleData';
 import { coerceRows, inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
 import { DbError, describeSql, executeSql, fieldsFromResult, providerLabel, resolveSqlParams } from '../data/dbApi';
+import { fakeRows, rowsToJsonText, type ProcText } from '../data/procText';
 import { closeDialog, dataCache, dataParamCtx, ensureData, mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
 import { defaultToString } from '../engine/format';
 
@@ -159,6 +160,44 @@ async function onChosen(hasInputs: boolean) {
     loading.value = false;
   }
 }
+/**
+ * A procedure's text was pasted instead of a connection: the data source takes its fields and made-up rows of that
+ * shape (a JSON source, so the preview works with no database), named DataSet1, DataSet2 … by its place in the list —
+ * the name the application gives the real rows (PROC1 -> DataSet1 …). Its parameters were made report parameters.
+ */
+function onFromText(info: ProcText) {
+  const ds = cur.value;
+  if (!ds) return;
+  const label = [info.schema, info.name].filter(Boolean).join('.');
+  if (/^(Database|DataSource)\d+$/.test(ds.name)) ds.name = uniqueName('DataSet' + (list.value.indexOf(ds) + 1), ds);
+  ds.kind = 'json';
+  ds.path = undefined;
+  ds.fields = info.fields;
+  ds.content = rowsToJsonText(fakeRows(info.fields));
+  void refresh(false).then(() => {
+    if (info.fields.length) return;
+    previewErr.value = info.star
+      ? `${label} returns SELECT * — its columns cannot be read from the text. Paste rows as JSON / CSV instead, or connect to the database.`
+      : info.calls.length
+        ? `${label} has no SELECT of its own: its rows come from ${info.calls.join(', ')}. Paste that procedure's text instead.`
+        : `No SELECT that returns rows was found in ${label}.`;
+  });
+  const inputs = info.params.filter((p) => !p.output).length;
+  notify(
+    `${label}: ${info.fields.length} field${info.fields.length === 1 ? '' : 's'} and ${inputs} parameter${inputs === 1 ? '' : 's'} read from the text` +
+      (info.fields.length ? ' — the preview shows made-up rows' : '') +
+      (info.resultSets > 1 ? ` (it returns ${info.resultSets} result sets: the first one is used)` : ''),
+  );
+}
+/** the source was made from a procedure's text (its rows are made up) */
+const fromProcText = computed(() => cur.value?.kind === 'json' && !!cur.value.sql?.name && !cur.value.sql.connectionId);
+function newFakeRows() {
+  const ds = cur.value;
+  if (!ds) return;
+  ds.content = rowsToJsonText(fakeRows(ds.fields));
+  void refresh(false);
+}
+
 /** Detect: database sources read their definition first (nothing runs); others parse their rows again */
 async function detect() {
   const ds = cur.value;
@@ -304,6 +343,14 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
           </template>
         </div>
         <template v-if="cur.kind === 'json' || cur.kind === 'csv'">
+          <div v-if="fromProcText" class="row hint" style="flex-wrap: wrap; gap: 6px">
+            <Workflow :size="13" />
+            <span class="grow"
+              >Fields and parameters read from the text of <b>{{ [cur.sql!.schema, cur.sql!.name].filter(Boolean).join('.') }}</b>. These rows are made up for
+              designing: the application sends the real rows as <b>{{ cur.name }}</b>.</span
+            >
+            <button class="btn small" title="Make the made-up rows again from the fields (after changing a field's type)" @click="newFakeRows">New made-up rows</button>
+          </div>
           <div class="row">
             <span class="section-title" style="margin: 0">{{ cur.kind.toUpperCase() }} content</span>
             <span class="grow" />
@@ -328,6 +375,7 @@ const FIELD_TYPES: FieldType[] = ['string', 'number', 'date', 'boolean'];
           @preview="refresh(true)"
           @chosen="onChosen"
           @switch-kind="switchKind"
+          @from-text="onFromText"
         />
         <div v-if="previewErr" class="err" style="word-break: break-word">{{ previewErr }}</div>
 

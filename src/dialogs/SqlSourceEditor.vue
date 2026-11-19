@@ -42,10 +42,14 @@ import {
   type DbSchema,
 } from '../data/dbApi';
 import { mutate, notify, requestLogin, requestReconnect, state } from '../store/designer';
+import { looksLikeProcedureText, parseProcedureText, type ProcText } from '../data/procText';
 
 const props = defineProps<{ source: SqlSource; focus?: 'procedures' }>();
-/** chosen: a table / view / procedure / function was picked (parameters loaded and linked) — the dialog reads its fields */
-const emit = defineEmits<{ preview: []; chosen: [hasInputs: boolean]; switchKind: [kind: 'json' | 'csv'] }>();
+/**
+ * chosen: a table / view / procedure / function was picked (parameters loaded and linked) — the dialog reads its fields.
+ * fromText: a procedure's text was pasted (no connection): parameters linked here, the dialog takes its fields.
+ */
+const emit = defineEmits<{ preview: []; chosen: [hasInputs: boolean]; switchKind: [kind: 'json' | 'csv']; fromText: [info: ProcText] }>();
 const src = props.source;
 
 /** the connection used last, so a new database source opens on its list right away (a per-browser convenience) */
@@ -294,6 +298,60 @@ function linkReportParam(p: SqlParam, quiet = false): string | null {
   return created;
 }
 
+/**
+ * A stored procedure's text (CREATE PROCEDURE …) instead of a connection: its name, parameters and fields are read
+ * from the text. The parameters become report parameters here; the dialog takes the fields and makes rows to design with.
+ */
+function useProcedureText(text: string): boolean {
+  const info = parseProcedureText(text);
+  if (!info) {
+    error.value = 'This text has no CREATE PROCEDURE … header to read.';
+    return false;
+  }
+  const prev = new Map(src.params.map((p) => [p.name.toLowerCase(), p]));
+  Object.assign(src, { mode: 'procedure', schema: info.schema, name: info.name, pkg: undefined, specific: undefined, returnsTable: undefined, returnType: undefined });
+  src.params = info.params.map((p) => ({
+    name: p.name,
+    type: p.type,
+    dbType: p.dbType,
+    mode: p.output ? 'OUT' : 'IN',
+    value: p.output ? '' : defaultValue(p.name, prev.get(p.name.toLowerCase())),
+  }));
+  autoLinkParams();
+  // the procedure's own defaults (= 'DAY', = 30) become the default values of the report parameters made for them
+  const defaults = new Map(info.params.filter((p) => p.defaultValue !== '').map((p) => [p.name.toLowerCase(), p.defaultValue]));
+  if (defaults.size)
+    mutate((r) => {
+      for (const rp of r.parameters) if (createdHere.has(rp.name) && !rp.defaultValue) rp.defaultValue = defaults.get(rp.name.toLowerCase()) ?? '';
+    });
+  error.value = '';
+  search.value = '';
+  emit('fromText', info);
+  return true;
+}
+/** pasted into the search box: a procedure's text is used at once (read from the clipboard: the box drops line breaks) */
+function onSearchPaste(e: ClipboardEvent) {
+  const text = e.clipboardData?.getData('text/plain') ?? '';
+  if (!looksLikeProcedureText(text)) return;
+  e.preventDefault();
+  useProcedureText(text);
+}
+function onSearchDrop(e: DragEvent) {
+  const text = e.dataTransfer?.getData('text/plain') ?? '';
+  if (!looksLikeProcedureText(text)) return;
+  e.preventDefault();
+  useProcedureText(text);
+}
+/** the box on the "no database on this website" notice */
+const procText = ref('');
+function readProcText() {
+  if (!looksLikeProcedureText(procText.value)) {
+    error.value = 'Paste the whole text of the procedure, starting with CREATE PROCEDURE (or CREATE OR ALTER PROCEDURE).';
+    return;
+  }
+  if (useProcedureText(procText.value)) procText.value = '';
+}
+
 const searchBox = ref<HTMLInputElement>();
 onMounted(async () => {
   const loaded = await loadConnections();
@@ -329,6 +387,15 @@ onMounted(async () => {
           </div>
         </div>
         <div class="no-db-way">
+          <b>Design from the procedure's text</b>
+          <span>Paste the stored procedure's text (<code>CREATE PROCEDURE …</code>): its parameters and fields are read from it, with made-up rows to design with. Your system sends the real rows.</span>
+          <textarea v-model="procText" spellcheck="false" placeholder="CREATE OR ALTER PROCEDURE RPT.SPR_SALES_DAILY ( @DATE_FROM DATE, … ) AS SELECT …" style="height: 90px; margin-top: 8px; font-family: Consolas, monospace; font-size: 12px" />
+          <div class="row" style="margin-top: 6px">
+            <button class="btn small primary" :disabled="!procText.trim()" @click="readProcText"><Workflow :size="13" /> Read the procedure</button>
+          </div>
+          <div v-if="error && procText" class="err">{{ error }}</div>
+        </div>
+        <div class="no-db-way">
           <b>Design with the live database</b>
           <span>Run ReportTool on your computer (<code>npm run dev</code>) and create the connection there. When the design is finished, use <b>Copy Text</b> to take it to your system.</span>
         </div>
@@ -362,7 +429,15 @@ onMounted(async () => {
       <div class="col" style="width: 300px; min-width: 300px">
         <div class="row" style="gap: 4px">
           <Search :size="14" class="muted" />
-          <input ref="searchBox" v-model="search" :placeholder="only === 'procedures' ? 'Search stored procedures…' : 'Search tables, views, procedures…'" style="flex: 1" />
+          <input
+            ref="searchBox"
+            v-model="search"
+            :placeholder="only === 'procedures' ? 'Search, or paste CREATE PROCEDURE text' : 'Search tables, views, procedures…'"
+            title="Search — or paste a stored procedure's text (CREATE PROCEDURE …) to read its parameters and fields without a connection"
+            style="flex: 1"
+            @paste="onSearchPaste"
+            @drop="onSearchDrop"
+          />
         </div>
         <div class="kind-chips">
           <button class="kind-chip" :class="{ on: only === 'all' }" @click="only = 'all'">All</button>
@@ -372,7 +447,10 @@ onMounted(async () => {
         </div>
         <div class="list-box tree" style="flex: 1">
           <div v-if="only === 'all'" class="tree-item" :class="{ sel: src.mode === 'query' }" @click="chooseQuery"><CodeXml :size="14" /> <b>Custom SQL query</b></div>
-          <div v-if="!src.connectionId" class="empty-hint">Choose a connection, or click <b>New connection…</b> to log in to SQL Server, Oracle, PostgreSQL, MySQL or SQLite.</div>
+          <div v-if="!src.connectionId" class="empty-hint">
+            Choose a connection, or click <b>New connection…</b> to log in to SQL Server, Oracle, PostgreSQL, MySQL or SQLite.<br /><br />
+            <b>No connection?</b> Paste a stored procedure's text (<code>CREATE PROCEDURE …</code>) into the search box above: its parameters and fields are read from the text.
+          </div>
           <div v-else-if="loadingSchema" class="empty-hint">Loading database objects…</div>
           <div v-else-if="schema && only === 'procedures'" class="hint" style="padding: 4px 8px">Click a procedure: its parameters and fields load at once.</div>
           <template v-for="k in shownKinds" :key="k.key">
