@@ -96,6 +96,8 @@ import {
   zOrder,
   linkedTables,
   addTableSet,
+  addTableFromFields,
+  type FieldPick,
   moveTableColumn,
   setCrosstabField,
   CROSSTAB_LABEL,
@@ -845,7 +847,7 @@ function placeTool(tool: ToolId, p: Pt, keep = false, extra?: Partial<ReportElem
 const dropHint = ref<{ x: number; y: number; w: number; h: number; bind?: boolean } | null>(null);
 function acceptDrag(e: DragEvent) {
   const types = e.dataTransfer?.types ?? [];
-  return types.includes('text/x-rt-tool') || types.includes('text/x-rt-field');
+  return types.includes('text/x-rt-tool') || types.includes('text/x-rt-field') || types.includes('text/x-rt-fields');
 }
 function onDragOver(e: DragEvent) {
   if (!acceptDrag(e)) return;
@@ -871,6 +873,13 @@ function onDrop(e: DragEvent) {
   const p = toPage(e);
   const tool = dt.getData('text/x-rt-tool');
   if (tool) return placeTool(tool as ToolId, p, false, undefined, e.altKey);
+  // several fields picked in the Field List and dragged together: a table with one column per field
+  const many = dt.getData('text/x-rt-fields');
+  if (many) {
+    const bx = bandAt(p.y);
+    if (bx) addTableFromFields(JSON.parse(many) as FieldPick[], bx.band.id, snap(p.x - ml.value), snap(Math.max(0, p.y - bx.top)));
+    return;
+  }
   const f = dt.getData('text/x-rt-field');
   if (f) {
     const choice = JSON.parse(f) as FieldChoice;

@@ -87,6 +87,8 @@ import {
   equalizeColumns,
   fitTableToPageWidth,
   matchTableColumns,
+  applyTableStyle,
+  TABLE_STYLES,
   inSummaryBand,
   mergeCells,
   tableOp,
@@ -166,6 +168,18 @@ function columnMenu(e: MouseEvent) {
     { label: sel > 1 ? 'Match Selected Tables to This One' : 'Match Other Tables to This One', icon: AlignHorizontalDistributeCenter, action: () => matchTableColumns() },
     { label: 'Fit to Page Width', icon: MoveHorizontal, action: () => fitTableToPageWidth() },
   ]);
+}
+/** Home ▸ Table ▸ Style ▾: one-click looks for the table and its lined-up header / total parts */
+function tableStyleMenu(e: MouseEvent) {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openContextMenu(
+    { clientX: r.left, clientY: r.bottom + 2, preventDefault() {} } as MouseEvent,
+    Object.entries(TABLE_STYLES).map(([key, look]) => ({
+      label: look.label + (look.stripe ? ' (striped rows)' : ''),
+      icon: Palette,
+      action: () => applyTableStyle(key),
+    })),
+  );
 }
 const canMerge = computed(() => canMergeCells());
 const canUnmerge = computed(() => canUnmergeCells());
@@ -369,6 +383,9 @@ function onMargins(v: string) {
             <button class="rsmall" :disabled="!canMerge" title="Merge the selected table cells (Shift+click or drag across cells to select them)" @click="mergeCells"><TableCellsMerge :size="14" />Merge Cells</button>
             <button class="rsmall" :disabled="!canUnmerge" title="Split a merged cell back into single cells" @click="unmergeCells"><TableCellsSplit :size="14" />Unmerge</button>
             <button class="rsmall" :disabled="!tableSel" title="Equal column widths, line up tables, fit to page width" @click="columnMenu"><Columns3 :size="14" />Columns ▾</button>
+          </div>
+          <div class="rstack">
+            <button class="rsmall" :disabled="!tableSel" title="Table style: header, data rows and total row in one click (also on the lined-up header / total tables)" @click="tableStyleMenu"><Palette :size="14" />Style ▾</button>
           </div>
         </div>
         <div class="rgroup-title">Table</div>

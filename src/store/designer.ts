@@ -25,6 +25,7 @@ import {
   type ToolId,
 } from '../model/defaults';
 import { inferFields, loadDataSource, loadDataSourceSync } from '../data/dataSource';
+import { REPORT_TEMPLATES, reportFromTemplate, type TemplateKey } from '../model/templates';
 import { DbError, listConnections, resolveSqlParams, setAuthHandler, type DbConnection } from '../data/dbApi';
 import { compileCalcFields, paramValues, renderReport } from '../engine/renderer';
 import {
@@ -298,7 +299,7 @@ function tableSetKind(band: Band): 'main' | 'section' {
  * the table left / right, changes all three (linkedTables).
  * `single` (Alt + click): one table where it was dropped, as before.
  */
-export function addTableSet(bandId: string, x: number, y: number, single = false): ReportElement | null {
+export function addTableSet(bandId: string, x: number, y: number, single = false, spec?: TableSetSpecFn, what = 'Table added'): ReportElement | null {
   const dropBand = findBand(bandId);
   if (!dropBand) return null;
   if (single) return addElement('table', bandId, x, y);
@@ -320,31 +321,115 @@ export function addTableSet(bandId: string, x: number, y: number, single = false
     const body = bandOf(kind === 'main' ? 'detail' : 'drDetail');
     const footer = bandOf(kind === 'main' ? 'reportFooter' : 'drFooter');
 
-    const cols = [100, 100, 100];
-    const width = cols.reduce((a, b) => a + b, 0);
     const cw = contentWidth(r);
     let left = Math.max(0, Math.round(x));
+    // dropped close to the right edge: the table starts at the left margin
+    if (!r.page.autoWidth && cw - left < 200) left = 0;
+    const s = (spec ?? defaultTableSpec)(total, r.page.autoWidth ? 0 : cw - left);
+    const width = s.columns.reduce((a, b) => a + b, 0);
     if (!r.page.autoWidth && left + width > cw) left = Math.max(0, cw - width);
     // the band it was dropped on: where it was dropped; the other two: under what they already hold
     const topIn = (b: Band) => (b.id === bandId ? Math.max(0, Math.round(y)) : Math.ceil(Math.max(0, ...r.elements.filter((e) => e.bandId === b.id).map((e) => e.y + e.height))));
-    const cell = (text: string, style: StyleProps = {}): TableCell => ({ ...emptyCell(), text, style });
     const make = (b: Band, name: string, cells: TableCell[], canGrow: boolean) => {
-      const t = createElement('table', b.id, left, topIn(b), r.elements, { columns: [...cols], rows: [{ height: 25, cells }], width, height: 25, canGrow } as Partial<ReportElement>) as TableElement;
+      const t = createElement('table', b.id, left, topIn(b), r.elements, { columns: [...s.columns], rows: [{ height: 25, cells }], width, height: 25, canGrow } as Partial<ReportElement>) as TableElement;
       t.name = uniqueName(r, name);
+      normalizeSpans(t);
       r.elements.push(t);
       ensureBandFits(r, b.id);
       return t;
     };
-    make(header, 'tableHeader', cols.map((_, i) => cell(`Column ${i + 1}`, { bold: true, textAlign: 'center', backColor: '#f3f4f6' })), false);
-    bodyId = make(body, 'table', cols.map(() => cell('')), true).id;
-    make(footer, 'tableTotal', cols.map((_, i) => cell(i === 0 ? total : '', { bold: true })), false);
+    make(header, 'tableHeader', s.header, false);
+    bodyId = make(body, 'table', s.body, true).id;
+    make(footer, 'tableTotal', s.footer, false);
     where = `captions in ${BAND_LABELS[header.type]}, rows in ${BAND_LABELS[body.type]}, ${total} in ${BAND_LABELS[footer.type]}`;
   });
   state.selection = [bodyId];
   state.selectedCell = null;
   state.selectedBandId = null;
-  notify(`Table added: ${where}. Their columns stay lined up. (Alt + click: a single table)`, 'success');
+  notify(`${what}: ${where}. Their columns stay lined up.`, 'success');
   return findElement(bodyId) ?? null;
+}
+
+/** the cells of a table set: one per column in the header, data and total rows */
+export interface TableSetSpec {
+  columns: number[];
+  header: TableCell[];
+  body: TableCell[];
+  footer: TableCell[];
+}
+/** builds the spec; `total` = the total row's label, `room` = width from the drop point to the right margin (0 = no limit) */
+type TableSetSpecFn = (total: string, room: number) => TableSetSpec;
+
+const specCell = (text: string, style: StyleProps = {}, more: Partial<TableCell> = {}): TableCell => ({ ...emptyCell(), text, style, ...more });
+const HEADER_LOOK: StyleProps = { bold: true, textAlign: 'center', backColor: '#f3f4f6' };
+
+/** the Table tool: 3 empty columns of 100px */
+function defaultTableSpec(total: string): TableSetSpec {
+  const cols = [100, 100, 100];
+  return {
+    columns: cols,
+    header: cols.map((_, i) => specCell(`Column ${i + 1}`, { ...HEADER_LOOK })),
+    body: cols.map(() => specCell('')),
+    footer: cols.map((_, i) => specCell(i === 0 ? total : '', { bold: true })),
+  };
+}
+
+// ------------------------------------------------------------------ a table from fields (Field List: pick several, drag)
+export interface FieldPick {
+  /** [FIELD] */
+  expr: string;
+  name: string;
+  /** string / number / date / boolean / calc */
+  type: string;
+}
+/** "SALE_DATE" -> "Sale Date", "orderTotal" -> "Order Total" */
+export const fieldCaption = (name: string) =>
+  name
+    .replace(/^\[|\]$/g, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\s]+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+/** amounts get 2 decimals */
+const MONEY = /(AMT|AMOUNT|PRICE|COST|COGS|TOTAL|BALANCE|PAID|TAX|FEE|DISCOUNT|REVENUE|PROFIT|GROSS|NET|SALARY|VALUE|CASH|SUBTOTAL|DUE)/i;
+/** numbers that are not added up in the total row (ids, codes, rates, years …) */
+const NOT_SUMMED = /(^|_)(ID|NO|NUM|NUMBER|CODE|YEAR|MONTH|DAY|RATE|PCT|PERCENT|SEQ|ROW|RN|LEVEL|AGE)$/i;
+
+/**
+ * The cells of a table made from fields: captions from the field names, data cells bound to the fields (dates as
+ * dates, amounts with 2 decimals, numbers right-aligned), and the total row: its label over the first columns and
+ * Sum() under every amount / quantity column. The columns fill the room (like a new table in Word), in proportion to
+ * the kind of field.
+ */
+export function tableSpecFromFields(fields: FieldPick[], total: string, room: number): TableSetSpec {
+  const natural = fields.map((f) => (f.type === 'date' ? 90 : f.type === 'number' ? 90 : f.type === 'boolean' ? 60 : 140));
+  const sum = natural.reduce((a, b) => a + b, 0);
+  const W = room > 0 ? Math.max(room, 40 * fields.length) : sum;
+  const columns = exactWidths(
+    natural.map((w) => (w * W) / sum),
+    W,
+  );
+  const fmt = (f: FieldPick) => (f.type === 'date' ? 'd' : f.type === 'number' && MONEY.test(f.name) ? 'n2' : '');
+  const align = (f: FieldPick): StyleProps['textAlign'] => (f.type === 'number' ? 'right' : f.type === 'date' || f.type === 'boolean' ? 'center' : 'left');
+  const summed = fields.map((f) => f.type === 'number' && !NOT_SUMMED.test(f.name));
+  const header = fields.map((f) => specCell(fieldCaption(f.name), { ...HEADER_LOOK }));
+  const body = fields.map((f) => specCell('', { textAlign: align(f), vAlign: 'middle' }, { expression: f.expr, format: fmt(f) }));
+  // the label covers the columns before the first total
+  const first = summed.indexOf(true);
+  const span = first > 0 ? first : first < 0 ? fields.length : 1;
+  const footer = fields.map((f, i) => {
+    if (i === 0 && !(first === 0)) return specCell(total, { bold: true, textAlign: span > 1 ? 'center' : 'left' }, span > 1 ? { colSpan: span } : {});
+    if (summed[i]) return specCell('', { bold: true, textAlign: 'right' }, { expression: `Sum(${f.expr})`, format: fmt(f) });
+    return specCell('', { bold: true });
+  });
+  return { columns, header, body, footer };
+}
+
+/** Several fields dropped together (or Insert table in the Field List): a table set with one column per field. */
+export function addTableFromFields(fields: FieldPick[], bandId: string, x: number, y: number): ReportElement | null {
+  if (!fields.length) return null;
+  return addTableSet(bandId, x, y, false, (total, room) => tableSpecFromFields(fields, total, room), `Table of ${fields.length} field${fields.length === 1 ? '' : 's'} added`);
 }
 
 /**
@@ -1617,6 +1702,76 @@ export function fitTableToPageWidth(tableId?: string) {
   });
 }
 
+// ------------------------------------------------------------------ table styles (Word-like, one click)
+interface TableLook {
+  label: string;
+  /** grid lines of the whole table: sides drawn on every cell (tlbr = full grid, b = row lines, '' = none) */
+  lines: { sides: string; color: string };
+  header: StyleProps;
+  body: StyleProps;
+  total: StyleProps;
+  /** background of every second data row */
+  stripe?: string;
+}
+export const TABLE_STYLES: Record<string, TableLook> = {
+  grid: { label: 'Grid', lines: { sides: 'tlbr', color: '#9ca3af' }, header: { bold: true, backColor: '#f3f4f6', color: '#111827' }, body: {}, total: { bold: true, backColor: '#f3f4f6', color: '#111827' } },
+  striped: { label: 'Striped', lines: { sides: 'tlbr', color: '#d1d5db' }, header: { bold: true, backColor: '#e5e7eb', color: '#111827' }, body: {}, total: { bold: true, backColor: '#e5e7eb', color: '#111827' }, stripe: '#f3f4f6' },
+  blue: { label: 'Blue', lines: { sides: 'tlbr', color: '#93c5fd' }, header: { bold: true, backColor: '#1e3a8a', color: '#ffffff' }, body: {}, total: { bold: true, backColor: '#dbeafe', color: '#1e3a8a' }, stripe: '#eff6ff' },
+  green: { label: 'Green', lines: { sides: 'tlbr', color: '#86efac' }, header: { bold: true, backColor: '#166534', color: '#ffffff' }, body: {}, total: { bold: true, backColor: '#dcfce7', color: '#166534' }, stripe: '#f0fdf4' },
+  orange: { label: 'Orange', lines: { sides: 'tlbr', color: '#9ca3af' }, header: { bold: true, backColor: '#f8cbad', color: '#111827' }, body: {}, total: { bold: true, backColor: '#f8cbad', color: '#111827' } },
+  lines: { label: 'Lines', lines: { sides: 'b', color: '#d1d5db' }, header: { bold: true, color: '#111827', borders: 'tb', borderColor: '#111827' }, body: {}, total: { bold: true, color: '#111827', borders: 'tb', borderColor: '#111827' } },
+  plain: { label: 'Plain', lines: { sides: '', color: '#9ca3af' }, header: { bold: true, color: '#111827' }, body: {}, total: { bold: true, color: '#111827' } },
+};
+const STRIPE_RULE = 'tableStripe';
+/** the part of a table set a table is, by its band */
+function tableRole(r: ReportDef, t: TableElement): 'header' | 'body' | 'total' {
+  const b = r.bands.find((x) => x.id === t.bandId);
+  if (!b) return 'body';
+  if (b.type === 'pageHeader' || b.type === 'drHeader' || b.type === 'groupHeader' || b.type === 'reportHeader') return 'header';
+  if (b.type === 'reportFooter' || b.type === 'drFooter' || b.type === 'groupFooter') return 'total';
+  return 'body';
+}
+
+/**
+ * Give the selected table — and the tables lined up with it (its header / data / total parts) — one of the styles:
+ * header row, data rows (every second one shaded when the style has stripes) and total row, plus the grid lines.
+ * Only the look changes (fill, text colour, bold, lines); texts, fields, fonts and alignment stay.
+ * A single table with several rows: its first row gets the header look.
+ */
+export function applyTableStyle(key: string, tableId?: string) {
+  const look = TABLE_STYLES[key];
+  const t = tableIdOf(tableId);
+  if (!look) return;
+  if (!t) return notify('Select a table first');
+  const ids = [t.id, ...linkedTables(t).map((o) => o.id)];
+  mutate((r) => {
+    for (const id of ids) {
+      const el = r.elements.find((e) => e.id === id) as TableElement | undefined;
+      if (!el || el.type !== 'table') continue;
+      const part = tableRole(r, el);
+      el.style = { ...el.style, borders: look.lines.sides, borderColor: look.lines.color };
+      el.rows.forEach((row, ri) => {
+        const role = ids.length === 1 && el.rows.length > 1 && ri === 0 ? 'header' : part;
+        const want = look[role];
+        for (const c of row.cells) {
+          const s = { ...c.style };
+          // what a style sets; cleared first, so switching styles leaves nothing of the old one
+          for (const k of ['backColor', 'color', 'borders', 'borderColor'] as const) delete s[k];
+          if (role !== 'body') s.bold = true;
+          Object.assign(s, want);
+          c.style = s;
+        }
+      });
+      // stripes: a rule on the data table (every second record)
+      el.formatRules = (el.formatRules ?? []).filter((x) => x.id !== STRIPE_RULE);
+      // Mod is a function here (Mod(a, b)), not an operator; RowNumber() restarts in each group
+      if (look.stripe && part === 'body') el.formatRules.push({ id: STRIPE_RULE, condition: 'Mod(RowNumber(), 2) = 0', style: { backColor: look.stripe } });
+      if (!el.formatRules.length) delete el.formatRules;
+    }
+  });
+  notify(`Table style "${look.label}"${ids.length > 1 ? ` — also on the ${ids.length - 1} lined-up table${ids.length > 2 ? 's' : ''}` : ''}`, 'success');
+}
+
 // ------------------------------------------------------------------ moving a column
 /**
  * Tables lined up with this one: same left edge and the same column widths (± 2px) — e.g. the header row in the
@@ -2020,6 +2175,13 @@ export function loadReport(def: ReportDef, fileName?: string) {
 export function newReportCmd() {
   if (state.dirty && !confirm('Discard unsaved changes and create a new report?')) return;
   loadReport(newReport(), 'report.rptx');
+}
+
+/** New ▾ > a ready-made start (templates.ts): the shared header / footer parts, the table added afterwards. */
+export function newReportFromTemplate(key: TemplateKey) {
+  if (state.dirty && !confirm('Discard unsaved changes and create a new report?')) return;
+  loadReport(reportFromTemplate(key), 'report.rptx');
+  notify(`${REPORT_TEMPLATES[key].label}: ${REPORT_TEMPLATES[key].desc}. Add the table: the Table tool, or pick several fields and drag them in.`, 'success');
 }
 
 export function serializeReport(): string {

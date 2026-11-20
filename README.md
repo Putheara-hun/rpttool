@@ -148,6 +148,21 @@ Google fonts are downloaded when used (internet needed), text is measured after 
 loaded again when the report is opened. Print, saved HTML (links the font), PNG (font embedded) and PDF (text in a
 Google font is drawn as an image, like Khmer text) use the font; for RDL the font must be installed on the server.
 
+## Quick start: template, fields, style
+
+- **New ▾ › Company report**: a new report with the parts every report of a system shares — logo (`?LOGO`), company
+  name in Khmer and English (`?CMI_NAME_LOCAL`, `?CMI_NAME_ENG`), title (`?TITLE`), the filter line (`?FILTER`),
+  three signature lines (`?TEXT1`–`?TEXT3`, each hidden when empty), "Printed … by …" and Page N of M. The names are
+  the ones the application sends (ReportViewBase), so they fill in by themselves; the defaults only fill the preview.
+- **A table from fields**: in the Field List, Ctrl+click (or Shift+click) several fields, then drag them onto the page
+  — or click **Insert table**. One column per field, filling the page width: captions from the field names
+  ("SALE_DATE" → "Sale Date"), dates as dates, amounts with 2 decimals, numbers right-aligned, and the Grand Total row
+  with Sum() under the amount / quantity columns (not under ids, numbers, codes, rates). It is the same three-part set
+  as the Table tool, so its columns stay lined up.
+- **Home ▸ Table ▸ Style ▾**: Grid, Striped, Blue, Green, Orange, Lines, Plain — header row, data rows (every second one
+  shaded when the style has stripes: a format rule `Mod(RowNumber(), 2) = 0` on the data table) and total row, on the
+  table and its lined-up parts at once. Only the look changes; texts, fields, fonts and alignment stay.
+
 ## Table columns
 
 - The **Table** tool, clicked anywhere on the report, adds three tables lined up: the captions in the **Page Header**

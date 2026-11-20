@@ -18,6 +18,7 @@ import {
   FolderOpen,
   Globe,
   History,
+  LayoutTemplate,
   RefreshCw,
   ListTree,
   PencilRuler,
@@ -51,6 +52,7 @@ import {
   duplicateSelection,
   history,
   newReportCmd,
+  newReportFromTemplate,
   nudge,
   openDialog,
   pickReportFile,
@@ -65,6 +67,17 @@ import {
   undo,
 } from './store/designer';
 import { closeContextMenu, openContextMenu } from './designer/ui';
+import { REPORT_TEMPLATES } from './model/templates';
+
+/** New ▾ menu: a blank report or a ready-made start (logo, title, filter line, signatures, page numbers) */
+function newMenu(e: MouseEvent) {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openContextMenu({ clientX: r.left - 28, clientY: r.bottom + 2, preventDefault() {} } as MouseEvent, [
+    { label: 'Blank Report', icon: FilePlus, kbd: 'Ctrl+Alt+N', action: newReportCmd },
+    { sep: true },
+    { label: `${REPORT_TEMPLATES.company.label} (${REPORT_TEMPLATES.company.desc})`, icon: LayoutTemplate, action: () => newReportFromTemplate('company') },
+  ]);
+}
 
 /** Save ▾ menu: other file formats */
 function saveMenu(e: MouseEvent) {
@@ -227,6 +240,7 @@ onBeforeUnmount(() => {
       <div class="logo"><FileText :size="18" /> ReportTool</div>
       <template v-if="!embed.active">
         <button class="icon-btn" title="New report (Ctrl+Alt+N)" @click="newReportCmd"><FilePlus :size="16" /></button>
+        <button class="icon-btn save-caret" title="New from a template: Company report…" @click="newMenu"><ChevronDown :size="13" /></button>
         <button class="icon-btn" title="Open (Ctrl+O)" @click="pickReportFile"><FolderOpen :size="16" /></button>
         <button class="icon-btn" title="Open from text (paste a copied report)" @click="openFromText"><ClipboardPaste :size="16" /></button>
         <button class="icon-btn" title="Save (Ctrl+S)" @click="saveReport()"><Save :size="16" /></button>
