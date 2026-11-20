@@ -183,7 +183,11 @@ export function extractDefinition(xml: string): { def: ReportDef; modified: bool
   try {
     const def = JSON.parse(strFromU8(inflateSync(unb64(m[2].trim())))) as ReportDef;
     const core = text.slice(0, m.index) + text.slice(m.index + m[0].length);
-    return { def, modified: fnv(core) !== m[1] };
+    // a copy that only lost / gained white space at the end (a trimmed paste, a text field, a SQL script) is the same
+    // report — otherwise the design would be rebuilt from the RDL and lose its tables, fonts …
+    const bare = core.replace(/\s+$/, '');
+    const same = [core, bare, bare + '\n'].some((c) => fnv(c) === m[1]);
+    return { def, modified: !same };
   } catch {
     return null;
   }

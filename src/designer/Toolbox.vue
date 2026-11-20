@@ -31,7 +31,7 @@ const groups: { title: string; items: { id: ToolId | null; label: string; icon: 
         id: 'table',
         label: 'Table',
         icon: Table,
-        tip: 'Click on the Page Header, Detail or Report Footer: captions, data row and Grand Total row in their bands, lined up (their columns change together). Alt + click: one table',
+        tip: 'Click anywhere on the report: column titles in the Page Header, the data row in Detail and the Grand Total row in the Report Footer, lined up (their columns change together). Alt + click: one table where you click',
       },
       { id: 'checkbox', label: 'Check Box', icon: SquareCheck },
     ],

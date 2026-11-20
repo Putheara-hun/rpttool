@@ -279,13 +279,11 @@ export function addElement(tool: ToolId, bandId: string, x: number, y: number, e
 
 // ------------------------------------------------------------------ the Table tool: captions, rows and total together
 /**
- * The three bands of a table set dropped on `band`: the main report's Page Header / Detail / Report Footer, or a detail
- * report's own header / detail / footer. null: another band (Report Header, groups, Page Footer) gets a single table.
+ * Where a table set goes: dropped anywhere on the main report -> its Page Header / Detail / Report Footer; dropped in a
+ * detail report section -> that section's own header / detail / footer.
  */
-function tableSetKind(band: Band): 'main' | 'section' | null {
-  if (band.detailReportId) return band.type === 'drHeader' || band.type === 'drDetail' || band.type === 'drFooter' ? 'section' : null;
-  if (band.groupId) return null;
-  return band.type === 'pageHeader' || band.type === 'detail' || band.type === 'reportFooter' ? 'main' : null;
+function tableSetKind(band: Band): 'main' | 'section' {
+  return band.detailReportId ? 'section' : 'main';
 }
 
 /**
@@ -293,16 +291,18 @@ function tableSetKind(band: Band): 'main' | 'section' | null {
  *   captions in the Page Header (printed once per page),
  *   the data row in Detail (printed for every record),
  *   the Grand Total row in the Report Footer (printed once, at the end);
- * a detail report: its own header / detail / footer (total row "Total"). Missing bands are added.
+ * a detail report: its own header / detail / footer (total row "Total"). Missing bands are added. Wherever it is
+ * dropped (Report Header, Page Footer, a group …), the three parts go to those bands, at the left edge where it was
+ * dropped; in the band it was dropped on (when it is one of them) also at that height.
  * They share the left edge and the columns, and keep them: resizing, adding, removing or moving a column, or moving
  * the table left / right, changes all three (linkedTables).
- * Dropped on another band, or `single` (Alt): one table there, as before.
+ * `single` (Alt + click): one table where it was dropped, as before.
  */
 export function addTableSet(bandId: string, x: number, y: number, single = false): ReportElement | null {
   const dropBand = findBand(bandId);
   if (!dropBand) return null;
-  const kind = single ? null : tableSetKind(dropBand);
-  if (!kind) return addElement('table', bandId, x, y);
+  if (single) return addElement('table', bandId, x, y);
+  const kind = tableSetKind(dropBand);
   const total = kind === 'main' ? 'Grand Total' : 'Total';
   let bodyId = '';
   let where = '';
