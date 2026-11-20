@@ -1,7 +1,7 @@
 import { deepClone } from '../model/clone';
 // Central designer state (Vue reactivity) + editing commands with undo/redo.
 import { computed, markRaw, reactive, shallowReactive, toRaw, watch } from 'vue';
-import type { Band, BandType, DataSourceDef, DetailReportDef, FieldDef, HAlign, ReportDef, ReportElement, Row, StyleProps, SummaryFunc, TableCell, TableElement, TextElement } from '../model/types';
+import type { Band, BandType, DataSourceDef, DetailReportDef, FieldDef, GroupDef, HAlign, ReportDef, ReportElement, Row, StyleProps, SummaryFunc, TableCell, TableElement, TextElement } from '../model/types';
 import { textWidth } from '../engine/measure';
 import {
   applyAutoWidth,
@@ -430,6 +430,200 @@ export function tableSpecFromFields(fields: FieldPick[], total: string, room: nu
 export function addTableFromFields(fields: FieldPick[], bandId: string, x: number, y: number): ReportElement | null {
   if (!fields.length) return null;
   return addTableSet(bandId, x, y, false, (total, room) => tableSpecFromFields(fields, total, room), `Table of ${fields.length} field${fields.length === 1 ? '' : 's'} added`);
+}
+
+// ------------------------------------------------------------------ a grouped table (like Report Builder's Add Group)
+/*
+ * Grouping the main report's table makes every group print as its own part of the table:
+ *   Group Header   the group's value (one cell across the table)  [+ the column titles, "titles in every group"]
+ *   Detail         the group's rows
+ *   Group Footer   its subtotal: the Grand Total row's sums, added up over the group's rows only
+ * The new rows are tables lined up with the data table (same left edge and columns), so they follow when a column is
+ * resized, moved, added or removed, and Table ▸ Style colours them too.
+ */
+const GROUP_LOOK: StyleProps = { bold: true, textAlign: 'left', vAlign: 'middle', backColor: '#f9fafb' };
+
+/** the main report's table: the data table in Detail, its column titles and its Grand Total */
+function mainTableSet(r: ReportDef) {
+  const detail = r.bands.find((b) => b.type === 'detail' && !b.detailReportId);
+  const body = detail ? (r.elements.find((e) => e.type === 'table' && e.bandId === detail.id) as TableElement | undefined) : undefined;
+  if (!body) return null;
+  const linked = linkedTables(body, r.elements);
+  const typeOf = (t: TableElement) => r.bands.find((b) => b.id === t.bandId)?.type;
+  return {
+    body,
+    /** in the Page Header, or in the innermost group header when every group repeats them */
+    titles: linked.find((t) => typeOf(t) === 'pageHeader') ?? linked.find((t) => typeOf(t) === 'groupHeader' && !isGroupRow(r, t)),
+    total: linked.find((t) => typeOf(t) === 'reportFooter'),
+  };
+}
+
+/** a group's value row: a table in a group header whose one row is a single cell across all columns */
+function isGroupRow(r: ReportDef, t: TableElement) {
+  if (r.bands.find((b) => b.id === t.bandId)?.type !== 'groupHeader') return false;
+  if (t.name.startsWith('tableGroup')) return true;
+  return t.rows.length === 1 && t.columns.length > 1 && (t.rows[0].cells[0]?.colSpan ?? 1) >= t.columns.length;
+}
+
+/** the main data source's type of a field */
+function mainFieldType(r: ReportDef, name: string) {
+  const ds = r.dataSources.find((d) => d.id === r.dataSourceId);
+  const fields = ds?.fields?.length ? ds.fields : inferFields(rowsFor(ds?.id));
+  return fields.find((f) => f.name.toLowerCase() === name.toLowerCase())?.type;
+}
+
+/** band height = what it holds (no empty strip between the table's parts) */
+function heightToContent(r: ReportDef, bandId: string) {
+  const b = r.bands.find((x) => x.id === bandId);
+  const els = r.elements.filter((e) => e.bandId === bandId);
+  if (b && els.length) b.height = Math.ceil(Math.max(...els.map((e) => e.y + e.height)));
+}
+
+/** a table lined up with the data table, at the bottom of a band */
+function lineUpTable(r: ReportDef, band: Band, body: TableElement, name: string, rows: { height: number; cells: TableCell[] }[]) {
+  const y = Math.ceil(Math.max(0, ...r.elements.filter((e) => e.bandId === band.id).map((e) => e.y + e.height)));
+  const height = rows.reduce((a, row) => a + row.height, 0);
+  const t = createElement('table', band.id, body.x, y, r.elements, {
+    columns: [...body.columns],
+    rows,
+    width: body.width,
+    height,
+    canGrow: false,
+    style: deepClone(body.style),
+  } as Partial<ReportElement>) as TableElement;
+  t.name = uniqueName(r, name);
+  normalizeSpans(t);
+  r.elements.push(t);
+  heightToContent(r, band.id);
+  return t;
+}
+
+/** the subtotal row(s) of a group: the Grand Total row with the group's name in its label, or sums made from the data row */
+function subtotalRows(r: ReportDef, body: TableElement, total: TableElement | undefined, expr: string): { height: number; cells: TableCell[] }[] {
+  const value = `{${expr}}`;
+  if (total?.rows.length) {
+    const rows = deepClone(total.rows);
+    const label = rows[0].cells.find((c) => !c.expression && c.text.trim() && !c.text.includes('{'));
+    if (label) label.text = /grand\s+total/i.test(label.text) ? label.text.replace(/grand\s+total/i, 'Total') + ' ' + value : `${label.text} ${value}`;
+    else if (rows[0].cells[0] && !rows[0].cells[0].expression) rows[0].cells[0].text = `Total ${value}`;
+    return rows;
+  }
+  const src = body.rows[0]?.cells ?? [];
+  const summed = src.map((c) => {
+    const m = /^\[([^\]]+)\]$/.exec(c.expression.trim());
+    return !!m && mainFieldType(r, m[1]) === 'number' && !NOT_SUMMED.test(m[1]);
+  });
+  const first = summed.indexOf(true);
+  const span = first > 0 ? first : first < 0 ? src.length : 1;
+  const cells = src.map((c, i) => {
+    if (i === 0 && first !== 0) return specCell(`Total ${value}`, { bold: true, textAlign: 'left' }, span > 1 ? { colSpan: span } : {});
+    if (summed[i]) return specCell('', { bold: true, textAlign: 'right' }, { expression: `Sum(${c.expression.trim()})`, format: c.format });
+    return specCell('', { bold: true });
+  });
+  return [{ height: body.rows[0]?.height ?? 25, cells }];
+}
+
+/**
+ * Fill a group's header with its value row and its footer with the subtotal row, lined up with the main table.
+ * Only empty bands are filled (a header holding just the group's own field, as older versions added it, counts as
+ * empty). Call inside mutate. False when the Detail band has no table.
+ */
+export function fillGroupTable(r: ReportDef, groupId: string, footer = true): boolean {
+  const set = mainTableSet(r);
+  const g = r.groups.find((x) => x.id === groupId);
+  const expr = g?.expression.trim();
+  if (!set || !g || !expr) return false;
+  const bandOf = (type: 'groupHeader' | 'groupFooter') => {
+    let b = r.bands.find((x) => x.type === type && x.groupId === g.id);
+    if (!b) {
+      b = newBand(type, g.id);
+      r.bands.push(b);
+    }
+    return b;
+  };
+  const holds = (b: Band) => r.elements.filter((e) => e.bandId === b.id);
+  const { body, total } = set;
+  const n = body.columns.length;
+
+  const head = bandOf('groupHeader');
+  const inHead = holds(head);
+  const onlyOwnField = inHead.length === 1 && inHead[0].type === 'text' && (inHead[0] as TextElement).expression.trim() === expr;
+  if (onlyOwnField) r.elements = r.elements.filter((e) => e.id !== inHead[0].id);
+  if (!inHead.length || onlyOwnField) {
+    // the value row takes the look of the total row when the table has a style (its fill and text colour)
+    const tl = total?.rows[0]?.cells[0]?.style ?? {};
+    const look: StyleProps = { ...GROUP_LOOK, ...(tl.backColor ? { backColor: tl.backColor } : {}), ...(tl.color ? { color: tl.color } : {}) };
+    const cells = body.columns.map((_, i) => (i === 0 ? specCell(`{${expr}}`, look, n > 1 ? { colSpan: n } : {}) : emptyCell()));
+    lineUpTable(r, head, body, 'tableGroup', [{ height: body.rows[0]?.height ?? 25, cells }]);
+  }
+  if (footer) {
+    const foot = bandOf('groupFooter');
+    if (!holds(foot).length) lineUpTable(r, foot, body, 'tableSubtotal', subtotalRows(r, body, total, expr));
+  }
+  return true;
+}
+
+/** are the column titles in a group header (every group repeats them)? */
+function titlesInGroups(r: ReportDef) {
+  const t = mainTableSet(r)?.titles;
+  return !!t && r.bands.find((b) => b.id === t.bandId)?.type === 'groupHeader';
+}
+
+/**
+ * Where the column titles print: in every group (moved under the value row of the innermost group, repeated when
+ * a group goes on to the next page) — each group then looks like a table of its own — or once at the top of every
+ * page (Page Header). An emptied Page Header is removed, as it would leave a blank strip on every page. Call inside
+ * mutate.
+ */
+export function placeTableTitles(r: ReportDef, perGroup: boolean) {
+  const titles = mainTableSet(r)?.titles;
+  if (!titles) return;
+  const inner = r.groups[r.groups.length - 1];
+  let target = perGroup && inner ? r.bands.find((b) => b.type === 'groupHeader' && b.groupId === inner.id) : undefined;
+  if (!target) {
+    target = r.bands.find((b) => b.type === 'pageHeader' && !b.detailReportId);
+    if (!target) {
+      target = newBand('pageHeader');
+      target.height = 0;
+      r.bands.push(target);
+    }
+  }
+  if (perGroup && inner) target.repeatEveryPage = true;
+  const t = r.elements.find((e) => e.id === titles.id) as TableElement;
+  const from = r.bands.find((b) => b.id === t.bandId)!;
+  if (from.id === target.id) return;
+  t.bandId = target.id;
+  t.y = Math.ceil(Math.max(0, ...r.elements.filter((e) => e.bandId === target!.id && e.id !== t.id).map((e) => e.y + e.height)));
+  heightToContent(r, target.id);
+  heightToContent(r, from.id);
+  if (from.type === 'pageHeader' && !r.elements.some((e) => e.bandId === from.id)) r.bands = r.bands.filter((b) => b.id !== from.id);
+}
+
+/** for the ribbon and the Group dialog: is there a table to group, and where are its column titles */
+export const groupTableInfo = computed(() => {
+  const r = state.report;
+  return { table: !!mainTableSet(r), titlesPerGroup: titlesInGroups(r) };
+});
+
+/**
+ * Table ▸ Group ▾ ▸ a field: group the table's rows by it (a new innermost group): the value row above each group's
+ * rows, its subtotal below; the column titles repeat in every group unless they were set to print once per page.
+ */
+export function addTableGroup(expression: string) {
+  if (!mainTableSet(state.report)) return notify('First put a table in the Detail band (Table tool, or several fields dragged in together).');
+  mutate((r) => {
+    const perGroup = r.groups.length ? titlesInGroups(r) : true;
+    const g: GroupDef = { id: uid('g'), expression, sort: 'asc', keepWithFirstDetail: true };
+    r.groups.push(g);
+    fillGroupTable(r, g.id);
+    placeTableTitles(r, perGroup);
+  });
+  notify(`Grouped by ${expression}: its value above each group's rows, a subtotal below. Change groups in Report ▸ Group, Sort & Filter.`, 'success');
+}
+
+/** Table ▸ Group ▾ ▸ Column titles in every group (on / off) */
+export function setGroupTitles(perGroup: boolean) {
+  mutate((r) => placeTableTitles(r, perGroup));
 }
 
 /**
@@ -1727,6 +1921,8 @@ const STRIPE_RULE = 'tableStripe';
 function tableRole(r: ReportDef, t: TableElement): 'header' | 'body' | 'total' {
   const b = r.bands.find((x) => x.id === t.bandId);
   if (!b) return 'body';
+  // a group's value row (grouped table): the light look of the total rows, not the column titles' look
+  if (isGroupRow(r, t)) return 'total';
   if (b.type === 'pageHeader' || b.type === 'drHeader' || b.type === 'groupHeader' || b.type === 'reportHeader') return 'header';
   if (b.type === 'reportFooter' || b.type === 'drFooter' || b.type === 'groupFooter') return 'total';
   return 'body';

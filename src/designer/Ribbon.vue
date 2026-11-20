@@ -89,6 +89,10 @@ import {
   matchTableColumns,
   applyTableStyle,
   TABLE_STYLES,
+  addTableGroup,
+  fieldsOf,
+  groupTableInfo,
+  setGroupTitles,
   inSummaryBand,
   mergeCells,
   tableOp,
@@ -180,6 +184,22 @@ function tableStyleMenu(e: MouseEvent) {
       action: () => applyTableStyle(key),
     })),
   );
+}
+/** Home ▸ Table ▸ Group ▾: group the table's rows by a field, like Report Builder's Add Group (value row + subtotal) */
+const canGroup = computed(() => groupTableInfo.value.table);
+function groupMenu(e: MouseEvent) {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const dsId = state.report.dataSourceId;
+  const fields = dsId ? fieldsOf(dsId) : [];
+  const perGroup = groupTableInfo.value.titlesPerGroup;
+  const grouped = state.report.groups.length > 0;
+  openContextMenu({ clientX: rect.left, clientY: rect.bottom + 2, preventDefault() {} } as MouseEvent, [
+    { header: grouped ? 'Add a group inside (by field)' : 'Group the table by' },
+    ...fields.map((f) => ({ label: f.name, icon: Group, action: () => addTableGroup(`[${f.name}]`) })),
+    { sep: true },
+    { label: (perGroup ? '✓ ' : '') + 'Column titles in every group (a table per group)', icon: Rows3, disabled: !grouped, action: () => setGroupTitles(!perGroup) },
+    { label: 'Group, Sort & Filter… (change / remove groups)', icon: ArrowUpDown, action: () => openDialog('groupSort') },
+  ]);
 }
 const canMerge = computed(() => canMergeCells());
 const canUnmerge = computed(() => canUnmergeCells());
@@ -386,6 +406,7 @@ function onMargins(v: string) {
           </div>
           <div class="rstack">
             <button class="rsmall" :disabled="!tableSel" title="Table style: header, data rows and total row in one click (also on the lined-up header / total tables)" @click="tableStyleMenu"><Palette :size="14" />Style ▾</button>
+            <button class="rsmall" :disabled="!canGroup" title="Group the table's rows by a field (like Report Builder): the group's value above its rows, its subtotal below, column titles in every group" @click="groupMenu"><Group :size="14" />Group ▾</button>
           </div>
         </div>
         <div class="rgroup-title">Table</div>

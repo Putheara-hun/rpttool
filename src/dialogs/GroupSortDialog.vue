@@ -6,7 +6,7 @@ import Modal from '../components/Modal.vue';
 import ExprInput from '../components/ExprInput.vue';
 import { createElement, newBand, uid } from '../model/defaults';
 import type { SortDef } from '../model/types';
-import { closeDialog, fieldsOf, mutate, state } from '../store/designer';
+import { closeDialog, fieldsOf, fillGroupTable, groupTableInfo, mutate, placeTableTitles, state } from '../store/designer';
 
 interface LG {
   id: string;
@@ -31,6 +31,10 @@ const groups = ref<LG[]>(
     };
   }),
 );
+/** a table in the Detail band: groups get rows in it (value row, subtotal row) like Report Builder's group rows */
+const hasTable = groupTableInfo.value.table;
+/** its column titles in every group (each group printed as a table of its own) or once at the top of the page */
+const titlesPerGroup = ref(r0.groups.length ? groupTableInfo.value.titlesPerGroup : true);
 const sorts = ref<SortDef[]>(deepClone((r0.sort)));
 const filter = ref(r0.filter);
 const fields = computed(() => (r0.dataSourceId ? fieldsOf(r0.dataSourceId).map((f) => f.name) : []).concat(r0.calculatedFields.map((c) => c.name)));
@@ -60,7 +64,8 @@ function ok() {
       if (!h) {
         h = newBand('groupHeader', g.id);
         r.bands.push(h);
-        if (g.expression) {
+        // without a table: the group's value as a field
+        if (g.expression && !hasTable) {
           const el = createElement('field', h.id, 0, 4, r.elements, { expression: g.expression, width: 300, height: 22, style: { bold: true, fontSize: 11 } } as any);
           r.elements.push(el);
         }
@@ -70,7 +75,12 @@ function ok() {
       const f = r.bands.find((b) => b.type === 'groupFooter' && b.groupId === g.id);
       if (g.footer && !f) r.bands.push(newBand('groupFooter', g.id));
       if (!g.footer && f) dropBands.add(f.id);
+      // with a table in Detail: empty group bands get the value row / the subtotal row, lined up with it
+      if (hasTable) fillGroupTable(r, g.id, g.footer);
     }
+    // the column titles: under the innermost group's value row, or back in the Page Header (before removed groups'
+    // bands go, so the titles are never deleted with them)
+    if (hasTable) placeTableTitles(r, titlesPerGroup.value);
     r.bands = r.bands.filter((b) => !dropBands.has(b.id));
     r.elements = r.elements.filter((e) => !dropBands.has(e.bandId));
     r.sort = deepClone((sorts.value)).filter((s) => s.expression);
@@ -124,6 +134,12 @@ function ok() {
         <option value="">Quick add: group by field…</option>
         <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
       </select>
+    </div>
+    <div v-if="hasTable" class="col" style="gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px">
+      <div class="hint">
+        The table in the Detail band is grouped like in Report Builder: each group prints its <b>value</b> above its rows and a <b>subtotal</b> under them (the Grand Total's sums, over the group's rows), lined up with the table's columns. Empty group bands are filled when you click OK.
+      </div>
+      <label class="row"><input v-model="titlesPerGroup" type="checkbox" /> Column titles in every group — each group printed as a table of its own (otherwise once at the top of each page)</label>
     </div>
 
     <div class="section-title">Sort detail rows (after grouping)</div>

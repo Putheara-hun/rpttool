@@ -163,6 +163,30 @@ Google font is drawn as an image, like Khmer text) use the font; for RDL the fon
   shaded when the style has stripes: a format rule `Mod(RowNumber(), 2) = 0` on the data table) and total row, on the
   table and its lined-up parts at once. Only the look changes; texts, fields, fonts and alignment stay.
 
+## Group a table (like Report Builder)
+
+**Home ▸ Table ▸ Group ▾ › a field** (or Report ▸ Group, Sort & Filter) groups the rows of the table in the Detail
+band. Every group then prints as its own part of the table:
+
+```
+Group Header   Berlin                                   ← the group's value, one cell across the table
+               Order Date | City | Contact | Qty | Amount   ← the column titles (in every group, repeated on a new page)
+Detail         the group's rows
+Group Footer   Total Berlin            |  52 | 21,798.43  ← subtotal: the Grand Total's sums over the group's rows
+… the next group, the same …
+Report Footer  Grand Total             | 610 | 143,255.25
+```
+
+- The new rows are tables lined up with the data table, so they follow when a column is resized, moved, added or
+  removed, and Table ▸ Style colours them (value row and subtotal in the light total look).
+- **Column titles in every group** (Group ▾, or the check box in the Group dialog) is on for a new grouping: each group
+  looks like a table of its own. Off = the titles print once at the top of every page (Page Header), as in Report
+  Builder's default. An empty Page Header is removed, as it would leave a blank strip on every page.
+- A second group (e.g. Country, then City inside) gets its own value row and subtotal; the titles go to the innermost
+  group.
+- Groups made earlier with empty header / footer bands are filled when you click OK in the Group dialog; bands that
+  already hold something are left as they are. Every text can be edited afterwards ("Total {[City]}", the value row).
+
 ## Table columns
 
 - The **Table** tool, clicked anywhere on the report, adds three tables lined up: the captions in the **Page Header**
